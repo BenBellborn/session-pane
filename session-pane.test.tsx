@@ -415,11 +415,12 @@ test('a new prompt keeps every denied call', HEADING, async ($, on) => {
   expect((await paneParts($, on, denyAndPrompt)).get('Permissions')).toEqual(['Bash: git push origin main'])
 })
 
-// Each highlighted Text after the presses: its text and whether it is drawn inverse.
+// Each highlighted Text after the presses: drawn on the selection background, never inverse (the host's hover is inverse).
 async function highlighted($: Engine, on: On, presses: string[], before?: () => Promise<unknown>) {
   const texts = await paneTextElements($, on, before, presses)
 
-  return texts.filter(t => t.props.inverse).map(t => t.text)
+  expect(texts.filter(t => t.props.inverse)).toEqual([])
+  return texts.filter(t => t.props.backgroundColor === 'suggestion').map(t => t.text)
 }
 
 const SCOUT = { status: 'running', type: 'Explore', model: 'claude-opus-5-5', name: 'scout', description: 'find it' }

@@ -113,13 +113,13 @@ export const register: Register = (on, options) => {
       files.flatMap((file, i) => [
         ...(i === 0 ? [] : [<Text color="inactive">, </Text>]),
         <Button key={file.item.key} plain onPress={() => itemPress($, file.item)}>
-          <Text color={extensionColor(file.path)} inverse={file.isSelected}>{file.name}</Text>
+          <Text color={extensionColor(file.path)} {...selectedStyle(file.isSelected)}>{file.name}</Text>
         </Button>,
       ])
     // A selected line is padded to the pane's width, so its highlight spans the line.
     const pressableLine = (row: Extract<Row, { kind: 'line' }>, item: PressedItem) => (
       <Button key={item.key} plain onPress={() => itemPress($, item)}>
-        <Text color={row.color} inverse={row.isSelected} wrap="truncate-end">{row.isSelected ? row.text.padEnd(e.props.bodyColumns) : row.text}</Text>
+        <Text color={row.color} {...selectedStyle(row.isSelected)} wrap="truncate-end">{row.isSelected ? row.text.padEnd(e.props.bodyColumns) : row.text}</Text>
       </Button>
     )
     // A part's header fills the pane's width: "── Agents ───────".
@@ -383,6 +383,11 @@ function inputSummary(input: unknown) {
   const named = ['command', 'file_path', 'url', 'pattern', 'path'].map(k => fields[k]).find(v => typeof v === 'string')
 
   return String(named ?? JSON.stringify(input)).replace(/\s+/g, ' ')
+}
+
+// A selected item's style: a background and bold, never inverse, so it differs from the host's pointer hover (an inverse).
+function selectedStyle(isSelected: boolean | undefined) {
+  return isSelected ? { backgroundColor: 'suggestion' as const, bold: true } : {}
 }
 
 // The pane's rows: each part with something to show, under its header, and the open section under the part of its item.
