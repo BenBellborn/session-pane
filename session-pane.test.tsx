@@ -1,0 +1,399 @@
+// Run from the repo folder: claude plugin test
+import { expect, mock, test } from 'claude-code/testing'
+
+type On = Parameters<Parameters<typeof test>[1]>[1]
+type Engine = Parameters<Parameters<typeof test>[1]>[0]
+
+const TODO = [
+  '# TODO',
+  '',
+  '## Task 3: 🔴 [Ben] [Planned] Give XP for puzzles',
+  '- **Goal:** x',
+  '',
+  '## Task 18: 🔴 [Bug] [Planned] Make every legend reach the AI',
+  '',
+  '## Task: 20a** 🟡 [Bug] **Half-formatted heading',
+  '',
+  '## Task 46: 🟡 [Refactor] Domain-first names',
+].join('\r\n')
+
+type Agent = { id?: string; parentId?: string; status: string; type: string; model?: string; name?: string; description: string }
+
+// The task format of the TODO text above; a test without it gets the manifest's defaults.
+const HEADING = { options: { taskFormat: 'heading' } }
+
+type Files = {
+  todo?: string
+  rootTodo?: string
+  state?: object
+  env?: Record<string, string>
+  git?: string
+  diff?: string
+  agents?: Agent[]
+  ran?: string[]
+}
+
+// The engine's files: docs/TODO.md (`todo`) and TODO.md (`rootTodo`) under the project folder C:/proj, and the filter file when
+// `state` is given; the env (USERPROFILE C:/Users/u unless `env` is given), `git status -z` output, `git diff` output and the agent
+// list. Each git command line run is noted in `ran`.
+function mockEngine(on: On, files: Files) {
+  const env = files.env ?? { USERPROFILE: 'C:/Users/u' }
+  const configDir = env.CLAUDE_CONFIG_DIR ?? `${env.USERPROFILE ?? env.HOME}/.claude`
+  const reads: Record<string, string | undefined> = {
+    'C:/proj/docs/TODO.md': files.todo,
+    'C:/proj/TODO.md': files.rootTodo,
+    [`${configDir}/cache/session-pane/s1.json`]: files.state && JSON.stringify(files.state),
+  }
+  on('env.get', (_$, e) => ({ value: env[e.name] }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', (_$, e) => {
+    files.ran?.push(e.argv.join(' '))
+    if (files.git === undefined) return { value: { exitCode: 128, stdout: '', stderr: 'not a git repository' } }
+    if (e.argv[1] === 'rev-parse') return { value: { exitCode: 0, stdout: 'C:/proj\n', stderr: '' } }
+    if (e.argv[1] === 'diff') return { value: { exitCode: 1, stdout: files.diff ?? '', stderr: '' } }
+
+    return { value: { exitCode: 0, stdout: files.git, stderr: '' } }
+  })
+  on('agent.list', () => ({ value: files.agents ?? [] }))
+  on('command.register', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 's1' }))
+  on('process.hookEnv', () => ({ value: { CLAUDE_PROJECT_DIR: 'C:/proj' } }))
+  on('fs.read', (_$, e) => {
+    const text = reads[e.path.replace(/\\/g, '/')]
+    if (text === undefined) throw new Error('ENOENT')
+
+    return { value: text }
+  })
+}
+
+// The pane's three parts, split at their header lines: changed files, agents, tasks. `before` runs once the session started.
+async function paneParts($: Engine, on: On, before?: () => Promise<unknown>) {
+  const parts: string[][] = []
+  for (const text of await paneTexts($, on, before)) {
+    if (text.startsWith('── ')) parts.push([])
+    else parts[parts.length - 1]!.push(text)
+  }
+
+  return parts
+}
+
+async function paneLines($: Engine, on: On) {
+  return (await paneParts($, on))[2]
+}
+
+// The shown text of each top-level Text; a Text nested in another one is part of its parent's text.
+async function paneTexts($: Engine, on: On, before?: () => Promise<unknown>) {
+  const texts: string[] = []
+  const found = await paneTextElements($, on, before)
+  for (let i = 0; i < found.length; i += 1 + nestedTextCount(found[i]!)) texts.push(found[i]!.text)
+
+  return texts
+}
+
+function nestedTextCount(element: { children: unknown[] }): number {
+  const nested = element.children.filter((c): c is { type: string; children: unknown[] } => typeof c === 'object' && c !== null && 'type' in c)
+
+  return nested.reduce((n, c) => n + (c.type === 'Text' ? 1 : 0) + nestedTextCount(c), 0)
+}
+
+async function paneTextElements($: Engine, on: On, before?: () => Promise<unknown>, presses: string[] = [], type = 'Text') {
+  const ui = await paneMount($, on, before)
+  for (const key of presses) await ui.press({ key })
+  const found = await ui.findAll({ type })
+  await ui.unmount()
+
+  return found
+}
+
+async function paneMount($: Engine, on: On, before?: () => Promise<unknown>) {
+  const clock = mock.clock(on)
+  await $.session.start({ source: 'startup', cwd: 'C:/proj/docs/adr', isInteractive: true } as never).catch(() => undefined)
+  await before?.()
+  await clock.advance(2000)
+
+  return $.ui.mount({
+    plugin: 'session-pane',
+    component: 'Pane',
+    requestId: 'session-pane',
+    surface: 'terminal',
+    props: { title: 'Session', isFocused: false, bodyColumns: 10, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  } as never)
+}
+
+test('with no filter, every task heading shows in file order', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  expect(await paneLines($, on)).toEqual([
+    '    3: 🔴 [Ben] [Planned] Give XP for puzzles',
+    '   18: 🔴 [Bug] [Planned] Make every legend reach the AI',
+    '  20a: 🟡 [Bug] Half-formatted heading',
+    '   46: 🟡 [Refactor] Domain-first names',
+  ])
+})
+
+test('a filter shows only its tasks, in its order; a task gone from TODO.md drops out', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, state: { mode: 'fix', ids: ['46', '99', '18'] } })
+
+  expect(await paneLines($, on)).toEqual([
+    '   46: 🟡 [Refactor] Domain-first names',
+    '   18: 🔴 [Bug] [Planned] Make every legend reach the AI',
+  ])
+})
+
+test('a filter with no task left names its run', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, state: { mode: 'plan', ids: [] } })
+
+  const texts = await paneTexts($, on)
+  expect(texts).toContain('── Tasks (/plan) ')
+  expect(texts.at(-1)).toBe('None')
+})
+
+test('a project with no task file names the files it looked for', HEADING, async ($, on) => {
+  mockEngine(on, {})
+
+  expect(await paneLines($, on)).toEqual(['No TODO.md or docs/TODO.md.'])
+})
+
+const CHECKBOXES = ['# TODO', '- [ ] Write the docs', '- [x] Pick a name', '  * [ ] Nested item', 'Text - [ ] not at line start'].join('\n')
+
+test('by default, each open checkbox line of TODO.md shows; checked ones do not', async ($, on) => {
+  mockEngine(on, { rootTodo: CHECKBOXES, todo: TODO })
+
+  expect(await paneLines($, on)).toEqual(['Write the docs', 'Nested item'])
+})
+
+test('the first task file found fills the Tasks part', { options: { taskFiles: 'tasks.md, docs/TODO.md', taskFormat: 'heading' } }, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  expect((await paneLines($, on))?.[0]).toBe('    3: 🔴 [Ben] [Planned] Give XP for puzzles')
+})
+
+test('a custom pattern takes its id and title groups', { options: { taskFormat: 'custom', taskPattern: '^TODO\\((?<id>\\w+)\\): (?<title>.*)$' } }, async ($, on) => {
+  mockEngine(on, { rootTodo: ['TODO(a1): Ship it', 'other', 'TODO(b2): Test it'].join('\n') })
+
+  expect(await paneLines($, on)).toEqual(['   a1: Ship it', '   b2: Test it'])
+})
+
+test('a bad custom pattern shows its error in the Tasks part', { options: { taskFormat: 'custom', taskPattern: '(' } }, async ($, on) => {
+  mockEngine(on, { rootTodo: CHECKBOXES })
+
+  expect((await paneLines($, on))?.[0]).toMatch(/^Bad task pattern: /)
+})
+
+test('a custom format with no pattern says so', { options: { taskFormat: 'custom' } }, async ($, on) => {
+  mockEngine(on, { rootTodo: CHECKBOXES })
+
+  expect(await paneLines($, on)).toEqual(['Task format is custom, but the task pattern is empty.'])
+})
+
+test('a hidden part shows no header', { options: { showChanged: false, showAgents: false } }, async ($, on) => {
+  mockEngine(on, { rootTodo: CHECKBOXES })
+
+  const texts = await paneTexts($, on)
+  expect(texts.filter(text => text.startsWith('── '))).toEqual(['── Tasks ─'])
+})
+
+test('the filter file sits under CLAUDE_CONFIG_DIR when it is set', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, env: { CLAUDE_CONFIG_DIR: 'D:/cfg', HOME: '/home/u' }, state: { mode: 'fix', ids: ['18'] } })
+
+  expect(await paneLines($, on)).toEqual(['   18: 🔴 [Bug] [Planned] Make every legend reach the AI'])
+})
+
+test('outside a git repo and with no agents, the top parts say so', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  const parts = await paneParts($, on)
+  expect(parts.length).toBe(3)
+  expect(parts[0]).toEqual(['None'])
+  expect(parts[1]).toEqual(['None'])
+})
+
+test('changed files show by name on one line; a rename shows its new name', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: [' M src/a.py', '?? docs/new.md', 'R  lib/b2.py', 'lib/b.py', '?? build/out', ''].join('\0') })
+
+  expect((await paneParts($, on))[0]!.join('')).toBe('a.py, new.md, b2.py, out')
+})
+
+test('each changed file shows in its extension color and the commas in the theme gray', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: [' M src/A.CS', ' M x.py', '?? docs/new.md', '?? build/out', ''].join('\0') })
+
+  const colors = (await paneTextElements($, on)).slice(1, 9).map(t => [t.text, t.props.color])
+  expect(colors).toEqual([
+    ['A.CS', 'ide'],
+    [', ', 'inactive'],
+    ['x.py', 'warning'],
+    [', ', 'inactive'],
+    ['new.md', 'permission'],
+    [', ', 'inactive'],
+    ['out', undefined],
+    ['── Agents ', 'inactive'],
+  ])
+})
+
+const DIFF = ['diff --git a/src/a.py b/src/a.py', '--- a/src/a.py', '+++ b/src/a.py', '@@ -1,2 +1,2 @@', '-old', '+new', ' same', ''].join('\n')
+
+test('a press on a changed file shows its diff against HEAD from its first hunk, highlighted as its file type', HEADING, async ($, on) => {
+  const ran: string[] = []
+  mockEngine(on, { todo: TODO, git: [' M src/a.py', ''].join('\0'), diff: DIFF.replace(/\n/g, '\r\n'), ran })
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: 'src/a.py' })
+  expect(ran).toContain('git diff HEAD -- src/a.py')
+  expect(await ui.find({ type: 'Text', text: '── Diff a.py ' })).toBeDefined()
+  expect((await ui.find({ type: 'Code' }))!.props).toMatchObject({ source: '@@ -1,2 +1,2 @@\n-old\n+new\n same', format: 'diff', path: 'src/a.py' })
+  await ui.unmount()
+})
+
+test('a second press on the same file closes its diff', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: [' M src/a.py', ''].join('\0'), diff: DIFF })
+
+  expect(await paneTextElements($, on, undefined, ['src/a.py', 'src/a.py'], 'Code')).toEqual([])
+})
+
+test('a press on an untracked file shows it whole, as added lines', HEADING, async ($, on) => {
+  const ran: string[] = []
+  mockEngine(on, { todo: TODO, git: ['?? docs/new.md', ''].join('\0'), diff: 'new file mode 100644\n@@ -0,0 +1 @@\n+x\n', ran })
+
+  const [code] = await paneTextElements($, on, undefined, ['docs/new.md'], 'Code')
+  expect(ran).toContain('git diff --no-index -- /dev/null docs/new.md')
+  expect(code!.props.source).toBe('@@ -0,0 +1 @@\n+x')
+})
+
+test('git output with no hunk (a binary file) shows as is', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: [' M a.png', ''].join('\0'), diff: 'Binary files a/a.png and b/a.png differ\n' })
+
+  const [code] = await paneTextElements($, on, undefined, ['a.png'], 'Code')
+  expect(code!.props.source).toBe('Binary files a/a.png and b/a.png differ')
+})
+
+test('each running agent shows as model family, type and name; ended agents drop out', HEADING, async ($, on) => {
+  mockEngine(on, {
+    todo: TODO,
+    agents: [
+      { status: 'running', type: 'Explore', model: 'claude-opus-5-5', name: 'scout', description: 'find it' },
+      { status: 'completed', type: 'Plan', model: 'claude-opus-5-5', description: 'done' },
+      { status: 'waiting', type: 'general-purpose', model: 'claude-haiku-5-5', description: 'search docs' },
+    ],
+  })
+
+  expect((await paneParts($, on))[1]).toEqual(['Opus:Explore - scout', 'Haiku:general-purpose - search docs'])
+})
+
+test('a sub agent shows indented under the agent that started it', HEADING, async ($, on) => {
+  mockEngine(on, {
+    todo: TODO,
+    agents: [
+      { id: 'a1', status: 'running', type: 'Plan', model: 'claude-opus-5-5', name: 'lead', description: 'plan it' },
+      { id: 'a2', parentId: 'a1', status: 'running', type: 'Explore', model: 'claude-haiku-5-5', description: 'find files' },
+      { id: 'a3', status: 'running', type: 'Explore', model: 'claude-sonnet-5-5', description: 'other' },
+    ],
+  })
+
+  expect((await paneParts($, on))[1]).toEqual(['Opus:Plan - lead', '└ Haiku:Explore - find files', 'Sonnet:Explore - other'])
+})
+
+// A Monitor task and a background Bash task, started once the session started.
+function backgroundStart($: Engine, on: On) {
+  on('tool.call', { tool: 'Monitor' }, () => ({ result: { taskId: 'm1', timeoutMs: 0 } }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' } }))
+
+  return async () => {
+    await $.tool.call({ tool: 'Monitor', description: 'Watch the build', timeout_ms: 1000, command: 'tail -f log' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'make', description: 'Build the app', run_in_background: true } as never)
+  }
+}
+
+test('a background task shows under the agents', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  expect((await paneParts($, on, backgroundStart($, on)))[1]).toEqual(['monitor - Watch the build', 'shell - Build the app'])
+})
+
+test('a shell task drops out when its end notice comes in as a prompt', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+  const start = backgroundStart($, on)
+  on('prompt.submit', (_$, e) => e as never)
+  const startAndEnd = async () => {
+    await start()
+    await $.prompt.submit({
+      origin: { kind: 'task-notification' },
+      text:
+        '<task-notification><task-id>b1</task-id><status>completed</status>' +
+        '<summary>Background command "Build the app" completed (exit code 0)</summary></task-notification>',
+    } as never)
+  }
+
+  expect((await paneParts($, on, startAndEnd))[1]).toEqual(['monitor - Watch the build'])
+})
+
+test('a background task drops out at its end notice', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+  const start = backgroundStart($, on)
+  on('session.receive', (_$, e) => e as never)
+  const startAndEnd = async () => {
+    await start()
+    await $.session.receive({
+      origin: { kind: 'task-notification' },
+      text: '<task-notification><task-id>m1</task-id><status>completed</status></task-notification>',
+    } as never)
+  }
+
+  expect((await paneParts($, on, startAndEnd))[1]).toEqual(['shell - Build the app'])
+})
+
+const PUSH = { tool: 'Bash', input: { command: 'git push\n  origin main' } }
+const WRITE = { tool: 'Write', input: { file_path: 'C:/proj/a.py', content: 'x' } }
+
+// The classifier's verdict on each call, in order; the test's hooks stand for the engine beneath the mod.
+function judged($: Engine, on: On, verdicts: [typeof PUSH, 'allow' | 'deny'][]) {
+  let i = 0
+  on('tool.judge', () => ({ decision: verdicts[i++]![1] }))
+
+  return async () => {
+    for (const [call] of verdicts) await $.tool.judge({ ...call, tool_use_id: `t${i}` } as never)
+  }
+}
+
+test('each call auto mode denied shows as one line under a Permissions header at the top', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  const texts = await paneTexts($, on, judged($, on, [[PUSH, 'deny'], [WRITE, 'deny']]))
+  expect(texts.slice(0, 4)).toEqual(['── Permissions ', 'Bash: git push origin main', 'Write: C:/proj/a.py', '── Changed '])
+})
+
+test('with no denied call, no Permissions part shows', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  expect((await paneParts($, on, judged($, on, [[PUSH, 'allow']]))).length).toBe(3)
+})
+
+test('a denied call the classifier allows later drops out; the others stay', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  const parts = await paneParts($, on, judged($, on, [[PUSH, 'deny'], [WRITE, 'deny'], [PUSH, 'allow']]))
+  expect(parts[0]).toEqual(['Write: C:/proj/a.py'])
+})
+
+test('a denied call a rule allows later drops out', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+  const deny = judged($, on, [[PUSH, 'deny']])
+  on('tool.check', () => ({ decision: 'allow' }))
+  const denyAndRetry = async () => {
+    await deny()
+    await $.tool.check(PUSH as never)
+  }
+
+  expect((await paneParts($, on, denyAndRetry)).length).toBe(3)
+})
+
+test('a new prompt keeps every denied call', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+  const deny = judged($, on, [[PUSH, 'deny']])
+  on('prompt.submit', (_$, e) => e as never)
+  const denyAndPrompt = async () => {
+    await deny()
+    await $.prompt.submit({ text: 'go on' } as never)
+  }
+
+  expect((await paneParts($, on, denyAndPrompt))[0]).toEqual(['Bash: git push origin main'])
+})

@@ -1,0 +1,54 @@
+{
+  "name": "session-pane",
+  "version": "0.2.0",
+  "description": "A pane beside the chat that shows what the session does now: denied permissions, changed files with their diffs, running agents and background tasks, and the open tasks of your TODO file.",
+  "author": { "name": "Ben Bellborn" },
+  "repository": "https://github.com/BenBellborn/session-pane",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "taskFiles": {
+      "type": "string",
+      "title": "Task files",
+      "description": "Comma-separated paths from the project folder. The first file found fills the Tasks part.",
+      "default": "TODO.md, docs/TODO.md"
+    },
+    "taskFormat": {
+      "type": "string",
+      "title": "Task format",
+      "description": "checkbox: each open '- [ ] text' line. heading: each '## Task <id>: <title>' line. custom: the Task pattern below.",
+      "default": "checkbox",
+      "options": ["checkbox", "heading", "custom"]
+    },
+    "taskPattern": {
+      "type": "string",
+      "title": "Task pattern",
+      "description": "With Task format custom: a regex one task line matches, with a named group 'title' and an optional named group 'id'.",
+      "default": ""
+    },
+    "showPermissions": {
+      "type": "boolean",
+      "title": "Show denied permissions",
+      "description": "Calls auto mode denied, until a later call of the same tool and input is allowed.",
+      "default": true
+    },
+    "showChanged": {
+      "type": "boolean",
+      "title": "Show changed files",
+      "description": "Files git lists as changed or untracked; a press on a name shows its diff.",
+      "default": true
+    },
+    "showAgents": {
+      "type": "boolean",
+      "title": "Show agents",
+      "description": "Running agents and background tasks (shell, monitor, workflow).",
+      "default": true
+    },
+    "showTasks": {
+      "type": "boolean",
+      "title": "Show tasks",
+      "description": "Open tasks of the first task file found.",
+      "default": true
+    }
+  }
+}

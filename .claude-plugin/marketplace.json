@@ -1,0 +1,12 @@
+{
+  "name": "session-pane",
+  "owner": { "name": "Ben Bellborn" },
+  "description": "session-pane: a Claude Code pane that shows what the session does now.",
+  "plugins": [
+    {
+      "name": "session-pane",
+      "source": "./",
+      "description": "A pane beside the chat that shows what the session does now: denied permissions, changed files with their diffs, running agents and background tasks, and the open tasks of your TODO file."
+    }
+  ]
+}
