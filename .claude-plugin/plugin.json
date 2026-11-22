@@ -1,6 +1,6 @@
 {
   "name": "session-pane",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A pane beside the chat that shows what the session does now: denied permissions, changed files with their diffs, running agents and background tasks, and the open tasks of your TODO file.",
   "author": { "name": "Ben Bellborn" },
   "repository": "https://github.com/BenBellborn/session-pane",

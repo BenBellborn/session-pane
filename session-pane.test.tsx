@@ -31,11 +31,13 @@ type Files = {
   diff?: string
   agents?: Agent[]
   ran?: string[]
+  config?: object | string
+  written?: Record<string, string>
 }
 
 // The engine's files: docs/TODO.md (`todo`) and TODO.md (`rootTodo`) under the project folder C:/proj, and the filter file when
 // `state` is given; the env (USERPROFILE C:/Users/u unless `env` is given), `git status -z` output, `git diff` output and the agent
-// list. Each git command line run is noted in `ran`.
+// list, and config.json (`config`; a string as is). Each git command line run is noted in `ran`, each file written in `written`.
 function mockEngine(on: On, files: Files) {
   const env = files.env ?? { USERPROFILE: 'C:/Users/u' }
   const configDir = env.CLAUDE_CONFIG_DIR ?? `${env.USERPROFILE ?? env.HOME}/.claude`
@@ -43,7 +45,13 @@ function mockEngine(on: On, files: Files) {
     'C:/proj/docs/TODO.md': files.todo,
     'C:/proj/TODO.md': files.rootTodo,
     [`${configDir}/cache/session-pane/s1.json`]: files.state && JSON.stringify(files.state),
+    [`${configDir}/session-pane/config.json`]: typeof files.config === 'string' ? files.config : files.config && JSON.stringify(files.config),
   }
+  on('fs.write', (_$, e) => {
+    if (files.written) files.written[e.path.replace(/\\/g, '/')] = e.text
+
+    return { value: undefined }
+  })
   on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('process.run', (_$, e) => {
@@ -246,7 +254,7 @@ test('a press on a changed file shows its diff against HEAD from its first hunk,
   mockEngine(on, { todo: TODO, git: [' M src/a.py', ''].join('\0'), diff: DIFF.replace(/\n/g, '\r\n'), ran })
 
   const ui = await paneMount($, on)
-  await ui.press({ key: 'src/a.py' })
+  await ui.press({ key: 'Changed:src/a.py' })
   expect(ran).toContain('git diff HEAD -- src/a.py')
   expect(await ui.find({ type: 'Text', text: '── Diff a.py ' })).toBeDefined()
   expect((await ui.find({ type: 'Code' }))!.props).toMatchObject({ source: '@@ -1,2 +1,2 @@\n-old\n+new\n same', format: 'diff', path: 'src/a.py' })
@@ -256,14 +264,14 @@ test('a press on a changed file shows its diff against HEAD from its first hunk,
 test('a second press on the same file closes its diff', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, git: [' M src/a.py', ''].join('\0'), diff: DIFF })
 
-  expect(await paneTextElements($, on, undefined, ['src/a.py', 'src/a.py'], 'Code')).toEqual([])
+  expect(await paneTextElements($, on, undefined, ['Changed:src/a.py', 'Changed:src/a.py'], 'Code')).toEqual([])
 })
 
 test('a press on an untracked file shows it whole, as added lines', HEADING, async ($, on) => {
   const ran: string[] = []
   mockEngine(on, { todo: TODO, git: ['?? docs/new.md', ''].join('\0'), diff: 'new file mode 100644\n@@ -0,0 +1 @@\n+x\n', ran })
 
-  const [code] = await paneTextElements($, on, undefined, ['docs/new.md'], 'Code')
+  const [code] = await paneTextElements($, on, undefined, ['Changed:docs/new.md'], 'Code')
   expect(ran).toContain('git diff --no-index -- /dev/null docs/new.md')
   expect(code!.props.source).toBe('@@ -0,0 +1 @@\n+x')
 })
@@ -271,7 +279,7 @@ test('a press on an untracked file shows it whole, as added lines', HEADING, asy
 test('git output with no hunk (a binary file) shows as is', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, git: [' M a.png', ''].join('\0'), diff: 'Binary files a/a.png and b/a.png differ\n' })
 
-  const [code] = await paneTextElements($, on, undefined, ['a.png'], 'Code')
+  const [code] = await paneTextElements($, on, undefined, ['Changed:a.png'], 'Code')
   expect(code!.props.source).toBe('Binary files a/a.png and b/a.png differ')
 })
 
@@ -419,13 +427,13 @@ const SCOUT = { status: 'running', type: 'Explore', model: 'claude-opus-5-5', na
 test('a press on a changed file highlights its name only', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, git: [' M src/a.py', ' M b.md', ''].join('\0'), diff: DIFF })
 
-  expect(await highlighted($, on, ['src/a.py'])).toEqual(['a.py'])
+  expect(await highlighted($, on, ['Changed:src/a.py'])).toEqual(['a.py'])
 })
 
 test('a second press on a changed file clears its highlight', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, git: [' M src/a.py', ''].join('\0'), diff: DIFF })
 
-  expect(await highlighted($, on, ['src/a.py', 'src/a.py'])).toEqual([])
+  expect(await highlighted($, on, ['Changed:src/a.py', 'Changed:src/a.py'])).toEqual([])
 })
 
 test('a press on an agent line highlights the full line', HEADING, async ($, on) => {
@@ -454,4 +462,134 @@ test('a press on a permission line highlights it', HEADING, async ($, on) => {
   expect(await highlighted($, on, ['Permissions:Bash: git push origin main'], judged($, on, [[PUSH, 'deny']]))).toEqual([
     'Bash: git push origin main'.padEnd(10),
   ])
+})
+
+const TASK_46 = 'Tasks:   46: 🟡 [Refactor] Domain-first names'
+
+test('a session start writes config.json with the default actions when it is missing', HEADING, async ($, on) => {
+  const written: Record<string, string> = {}
+  mockEngine(on, { todo: TODO, written })
+
+  await paneMount($, on).then(ui => ui.unmount())
+  expect(JSON.parse(written['C:/Users/u/.claude/session-pane/config.json']!)).toEqual({
+    onPress: { changedFile: 'diff', task: 'select', permission: 'select', agent: 'select' },
+  })
+})
+
+test('a session start keeps a config.json that is there', HEADING, async ($, on) => {
+  const written: Record<string, string> = {}
+  mockEngine(on, { todo: TODO, config: { onPress: {} }, written })
+
+  await paneMount($, on).then(ui => ui.unmount())
+  expect(written).toEqual({})
+})
+
+test('a run action starts the program with the task file and line filled in', HEADING, async ($, on) => {
+  const spawned: { argv: readonly string[]; cwd?: string }[] = []
+  mockEngine(on, { todo: TODO, config: { onPress: { task: { run: ['notepad++', '-n{line}', '{file}'] } } } })
+  on('process.spawn', async function* (_$, e) {
+    spawned.push({ argv: e.argv, cwd: e.cwd })
+    yield* []
+
+    return { value: { code: 0, signal: null } } as never
+  })
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: TASK_46 })
+  await ui.unmount()
+  expect(spawned).toEqual([{ argv: ['notepad++', '-n10', 'C:/proj/docs/TODO.md'], cwd: 'C:/proj' }])
+})
+
+test('a run action on a changed file fills in its first changed line', HEADING, async ($, on) => {
+  const spawned: (readonly string[])[] = []
+  mockEngine(on, { todo: TODO, git: [' M src/a.py', ''].join('\0'), diff: '@@ -4,2 +7,3 @@\n+x\n', config: { onPress: { changedFile: { run: ['code', '-g', '{file}:{line}'] } } } })
+  on('process.spawn', async function* (_$, e) {
+    spawned.push(e.argv)
+    yield* []
+
+    return { value: { code: 0, signal: null } } as never
+  })
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: 'Changed:src/a.py' })
+  await ui.unmount()
+  expect(spawned).toEqual([['code', '-g', 'C:/proj/src/a.py:7']])
+})
+
+test('a show action opens a section with the command output under the pressed item', HEADING, async ($, on) => {
+  const ran: string[] = []
+  mockEngine(on, { todo: TODO, git: '', ran, config: { onPress: { task: { show: ['git', 'log', '--grep', 'Task {id}'] } } } })
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: TASK_46 })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  await ui.unmount()
+  expect(ran).toContain('git log --grep Task 46')
+  expect(texts.slice(-2)).toEqual(['── git 46 ', 'No output.'])
+})
+
+test('a submit action sends the filled text as a prompt', HEADING, async ($, on) => {
+  const sent: string[] = []
+  mockEngine(on, { todo: TODO, config: { onPress: { task: { submit: 'Explain task {id}' } } } })
+  on('prompt.submit', (_$, e) => {
+    sent.push(e.text)
+
+    return e as never
+  })
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: TASK_46 })
+  await ui.unmount()
+  expect(sent).toEqual(['Explain task 46'])
+})
+
+test('a submit action whose text starts with a slash runs that command', HEADING, async ($, on) => {
+  const commands: string[] = []
+  mockEngine(on, { todo: TODO, config: { onPress: { task: { submit: '/fix {id}' } } } })
+  on('command.run', (_$, e) => {
+    commands.push(`${e.command} ${e.args}`)
+
+    return { value: {} } as never
+  })
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: TASK_46 })
+  await ui.unmount()
+  expect(commands).toContain('fix 46')
+})
+
+test('a fill action writes the filled text in the prompt box', HEADING, async ($, on) => {
+  const filled: string[] = []
+  mockEngine(on, { todo: TODO, agents: [SCOUT], config: { onPress: { agent: { fill: 'What does {text} do?' } } } })
+  on('prompt.fill', (_$, e) => {
+    filled.push(e.text)
+
+    return { isFilled: true } as never
+  })
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: 'Agents:Opus:Explore - scout' })
+  await ui.unmount()
+  expect(filled).toEqual(['What does Opus:Explore - scout do?'])
+})
+
+test('a config.json that is no JSON shows a config error section and keeps the highlight', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, config: '{ onPress' })
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: TASK_46 })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  await ui.unmount()
+  expect(texts).toContain('── Config error ')
+  expect(texts).toContain('   46: 🟡 [Refactor] Domain-first names')
+})
+
+test('a diff action on a task shows a config error', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, config: { onPress: { task: 'diff' } } })
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: TASK_46 })
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  await ui.unmount()
+  expect(texts.at(-1)).toBe('onPress.task: diff works only on a changed file.')
 })

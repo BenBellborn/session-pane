@@ -1,20 +1,25 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, Register, ThemeKey } from 'claude-code'
 
-import type { BackgroundTasks, ChangedFile, FileDiff, OpenPermissions, SessionView } from '../types'
+import type { BackgroundTasks, ChangedFile, OpenPermissions, Output, SessionView, TaskLine } from '../types'
+import { configEnsure, itemPress } from './press'
+import type { PressedItem } from './press'
+import { attempt, configDirPath } from './shared'
 
 const PANE = 'session-pane'
 // Change the tag when SessionView's fields change: it declines what an earlier version stored.
-const view = atom({ plugin: 'session-pane', key: 'view' } as const, { changed: [], agents: [], lines: [] }, { shape: 'view-1' })
-const diff = atom({ plugin: 'session-pane', key: 'diff' } as const, null as FileDiff | null, { shape: 'diff-1' })
+const view = atom({ plugin: 'session-pane', key: 'view' } as const, { projectRoot: '', changed: [], agents: [], lines: [] }, { shape: 'view-2' })
+// The section a press opened; null: none. It belongs to the selected item and closes when the selection moves.
+// rule: the state scan reads atoms only as consts of the reading file; press.ts and register.tsx each declare these two.
+const output = atom({ plugin: 'session-pane', key: 'output' } as const, null as Output | null, { shape: 'output-1' })
+// The selection key of the one pressed item drawn highlighted ("Tasks:<line>", "Changed:<path>"); null: none.
+const selection = atom({ plugin: 'session-pane', key: 'selection' } as const, null as string | null, { shape: 'selection-1' })
 // Background tasks started in this session (shell, monitor, workflow), by task id. The engine lists none to a mod, so the
 // mod notes each one its tool call starts and drops it at its end notice or its TaskStop.
 const tasks = atom({ plugin: 'session-pane', key: 'tasks' } as const, {} as BackgroundTasks, { shape: 'tasks-1' })
 // Calls auto mode denied, kept until /permissions retries them. A retry is a new call with a new tool_use_id,
 // so a denial is matched on agent, tool and input.
 const permissions = atom({ plugin: 'session-pane', key: 'permissions' } as const, {} as OpenPermissions, { shape: 'permissions-1' })
-// The key of the one pressed line drawn highlighted ("Agents:<line>"); null: none.
-const selection = atom({ plugin: 'session-pane', key: 'selection' } as const, null as string | null, { shape: 'selection-1' })
 // A task's end notice: "<task-notification><task-id>b1</task-id>...<status>completed</status>...</task-notification>".
 // One delivery can hold several.
 const NOTICE = /<task-notification>([\s\S]*?)<\/task-notification>/g
@@ -50,14 +55,19 @@ type Settings = {
   showTasks: boolean
 }
 
+// A task as the filter arranges it: its pane line, its id when the format gives one, its line in the task file.
+type FoundTask = TaskLine
+
+// One changed file's name on the pane, pressable.
+type FileButton = { path: string; name: string; item: PressedItem; isSelected: boolean }
+
 // One pane row, top to bottom; the render hook draws each kind.
 type Row =
   | { kind: 'header'; name: string }
-  // A line with a key is pressable: a press selects it, a second press clears it.
-  | { kind: 'line'; text: string; color?: ThemeKey; key?: string; isSelected?: boolean }
-  // `openPath`: the file whose diff is open, drawn highlighted.
-  | { kind: 'changed'; files: ChangedFile[]; repoRoot: string; openPath?: string }
-  | { kind: 'diff'; diff: FileDiff }
+  // A line with an item is pressable: a press selects it and runs its action, a second press clears it.
+  | { kind: 'line'; text: string; color?: ThemeKey; item?: PressedItem; isSelected?: boolean }
+  | { kind: 'changed'; files: FileButton[] }
+  | { kind: 'output'; output: Output }
 
 export const register: Register = (on, options) => {
   const settings = settingsRead(options)
@@ -67,7 +77,8 @@ export const register: Register = (on, options) => {
     if (!e.isInteractive) return next(e)
     // rule: read from the project folder; a `cd` moves the session's folder and e.cwd, not CLAUDE_PROJECT_DIR.
     const projectRoot = (await $.process.hookEnv()).CLAUDE_PROJECT_DIR ?? e.cwd
-    const filterFolder = await filterFolderPath($)
+    const filterFolder = `${await configDirPath($)}/cache/session-pane`
+    await configEnsure($).catch(() => undefined)
     await $.command.register({ name: 'session-pane', description: 'Show denied permissions, changed files, running agents and open tasks in a pane' })
     void openPane($).catch(() => undefined)
     // Git, the agents, the task file and the filter file change outside the mod, so all are read again every 2 s.
@@ -97,17 +108,17 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Code, Text } = $.ui.resolve(e)
-    const rows = paneRows(await read($, view), Object.values(await read($, permissions)), await read($, diff), await read($, selection))
-    const changedNames = (row: Extract<Row, { kind: 'changed' }>) =>
-      row.files.flatMap((file, i) => [
+    const rows = paneRows(await read($, view), Object.values(await read($, permissions)), await read($, output), await read($, selection))
+    const fileButtons = (files: FileButton[]) =>
+      files.flatMap((file, i) => [
         ...(i === 0 ? [] : [<Text color="inactive">, </Text>]),
-        <Button key={file.path} plain onPress={() => diffToggle($, row.repoRoot, file)}>
-          <Text color={extensionColor(file.path)} inverse={file.path === row.openPath}>{fileName(file.path)}</Text>
+        <Button key={file.item.key} plain onPress={() => itemPress($, file.item)}>
+          <Text color={extensionColor(file.path)} inverse={file.isSelected}>{file.name}</Text>
         </Button>,
       ])
     // A selected line is padded to the pane's width, so its highlight spans the line.
-    const pressableLine = (row: Extract<Row, { kind: 'line' }>, key: string) => (
-      <Button key={key} plain onPress={() => selectionToggle($, key)}>
+    const pressableLine = (row: Extract<Row, { kind: 'line' }>, item: PressedItem) => (
+      <Button key={item.key} plain onPress={() => itemPress($, item)}>
         <Text color={row.color} inverse={row.isSelected} wrap="truncate-end">{row.isSelected ? row.text.padEnd(e.props.bodyColumns) : row.text}</Text>
       </Button>
     )
@@ -117,11 +128,11 @@ export const register: Register = (on, options) => {
         case 'header':
           return <Text color="inactive">{`── ${row.name} `.padEnd(Math.max(row.name.length + 4, e.props.bodyColumns), '─')}</Text>
         case 'line':
-          return row.key ? pressableLine(row, row.key) : <Text color={row.color} wrap="truncate-end">{row.text}</Text>
+          return row.item ? pressableLine(row, row.item) : <Text color={row.color} wrap="truncate-end">{row.text}</Text>
         case 'changed':
-          return <Box flexDirection="row" flexWrap="wrap">{changedNames(row)}</Box>
-        case 'diff':
-          return <Code source={row.diff.source} format="diff" path={row.diff.path} wrap="truncate-end" />
+          return <Box flexDirection="row" flexWrap="wrap">{fileButtons(row.files)}</Box>
+        case 'output':
+          return row.output.format === 'diff' ? <Code source={row.output.source} format="diff" path={row.output.path} wrap="truncate-end" /> : <Text>{row.output.source}</Text>
       }
     }
 
@@ -151,20 +162,13 @@ function taskLinePattern(options: PluginOptions): RegExp | string {
   return regex instanceof Error ? `Bad task pattern: ${regex.message}` : regex
 }
 
-async function filterFolderPath($: EngineInterface) {
-  // rule: fixed path outside the plugin folder, so a tool that knows only the session id writes it; README documents it.
-  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
-  const configDir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
-
-  return `${configDir}/cache/session-pane`
-}
-
 function openPane($: EngineInterface) {
   return $.ui.open({ id: PANE, title: 'Session' })
 }
 
 async function sync($: EngineInterface, projectRoot: string, filterFolder: string, settings: Settings) {
   const next: SessionView = {
+    projectRoot,
     ...(settings.showChanged ? await changedFiles($, projectRoot) : { changed: [] }),
     agents: settings.showAgents ? await runningAgents($) : [],
     ...(settings.showTasks ? await openTasks($, projectRoot, filterFolder, settings) : { lines: [] }),
@@ -226,33 +230,33 @@ function modelFamily(model: string | undefined) {
 }
 
 // The task lines of the first task file found, arranged by the session's filter file.
-async function openTasks($: EngineInterface, projectRoot: string, filterFolder: string, settings: Settings): Promise<Pick<SessionView, 'lines' | 'mode' | 'note'>> {
+async function openTasks($: EngineInterface, projectRoot: string, filterFolder: string, settings: Settings): Promise<Pick<SessionView, 'lines' | 'taskFile' | 'mode' | 'note'>> {
   if (typeof settings.taskLine === 'string') return { lines: [], note: settings.taskLine }
-  const text = await firstTaskFileRead($, projectRoot, settings.taskFiles)
-  if (text === undefined) return { lines: [] }
+  const found = await firstTaskFileRead($, projectRoot, settings.taskFiles)
+  if (found === undefined) return { lines: [] }
 
-  return arrange(taskLines(text, settings.taskLine), await filterRead($, filterFolder))
+  return { ...arrange(taskLines(found.text, settings.taskLine), await filterRead($, filterFolder)), taskFile: found.path }
 }
 
 async function firstTaskFileRead($: EngineInterface, projectRoot: string, taskFiles: string[]) {
   for (const path of taskFiles) {
     const text = await $.fs.read(`${projectRoot}/${path}`).catch(() => undefined)
-    if (text !== undefined) return text
+    if (text !== undefined) return { path, text }
   }
 
   return undefined
 }
 
-// Task key to pane line, in file order. A task with an id is keyed by it and shows it left-padded to 5 chars, so the titles
+// Task key to task, in file order. A task with an id is keyed by it and shows it left-padded to 5 chars, so the titles
 // line up; one without is keyed by its line number, which no filter names.
 function taskLines(text: string, taskLine: RegExp) {
-  const byKey = new Map<string, string>()
+  const byKey = new Map<string, FoundTask>()
   text.split(/\r?\n/).forEach((line, i) => {
     const m = taskLine.exec(line)
     if (!m) return
     const id = m.groups?.id
     const title = (m.groups?.title ?? m[0]).replace(/\*\*/g, '')
-    byKey.set(id ?? `#${i}`, id ? `${id.padStart(5)}: ${title}` : title)
+    byKey.set(id ?? `#${i}`, { text: id ? `${id.padStart(5)}: ${title}` : title, id, line: i + 1 })
   })
 
   return byKey
@@ -269,7 +273,7 @@ async function filterRead($: EngineInterface, filterFolder: string) {
 }
 
 // With a filter, its tasks show in its order and a task gone from the file drops out; without one, every task shows in file order.
-function arrange(byKey: Map<string, string>, filter: { mode: string; ids: string[] } | undefined): Pick<SessionView, 'lines' | 'mode'> {
+function arrange(byKey: Map<string, FoundTask>, filter: { mode: string; ids: string[] } | undefined): Pick<SessionView, 'lines' | 'mode'> {
   if (!filter) return { lines: [...byKey.values()] }
 
   return { lines: filter.ids.flatMap(id => byKey.get(id) ?? []), mode: filter.mode }
@@ -381,42 +385,66 @@ function inputSummary(input: unknown) {
   return String(named ?? JSON.stringify(input)).replace(/\s+/g, ' ')
 }
 
-// The pane's rows: each part with something to show, under its header. A part the settings hide is empty: sync fills none.
-function paneRows(shown: SessionView, asks: string[], opened: FileDiff | null, selected: string | null): Row[] {
+// The pane's rows: each part with something to show, under its header, and the open section under the part of its item.
+// A part the settings hide is empty: sync fills none.
+function paneRows(shown: SessionView, asks: string[], opened: Output | null, selected: string | null): Row[] {
+  const pick = { opened, selected }
   const rows = [
-    ...part('Permissions', lineRows('Permissions', asks, selected, 'permission')),
-    ...changedPart(shown, opened),
-    ...part('Agents', lineRows('Agents', shown.agents, selected)),
-    ...tasksPart(shown, selected),
+    ...part('Permissions', 'Permissions', textLines(shown, 'permission', asks, pick), opened),
+    ...part('Changed', 'Changed', changedRows(shown, selected), opened),
+    ...part('Agents', 'Agents', textLines(shown, 'agent', shown.agents, pick), opened),
+    ...part('Tasks', shown.mode ? `Tasks (/${shown.mode})` : 'Tasks', taskRows(shown, pick), opened),
   ]
 
   return rows.length === 0 ? [inactive('Nothing to show.')] : rows
 }
 
-// The changed file names, then the open diff under them; nothing while no file is changed.
-function changedPart(shown: SessionView, opened: FileDiff | null): Row[] {
+type Chosen = { opened: Output | null; selected: string | null }
+
+// A part's header and rows, then the open section when its item sits in this part; nothing when it has no row.
+function part(partName: string, header: string, rows: readonly Row[], opened: Output | null): Row[] {
+  if (rows.length === 0) return []
+  const section: Row[] = opened?.key.startsWith(`${partName}:`) ? [{ kind: 'header', name: opened.title }, { kind: 'output', output: opened }] : []
+
+  return [{ kind: 'header', name: header }, ...rows, ...section]
+}
+
+function changedRows(shown: SessionView, selected: string | null): Row[] {
   if (shown.changed.length === 0) return []
-  const diffPart = opened ? part(`Diff ${fileName(opened.path)}`, [{ kind: 'diff', diff: opened }]) : []
+  const repoRoot = shown.repoRoot!
+  const files = shown.changed.map(file => {
+    const name = fileName(file.path)
+    const values = { text: file.path, path: file.path, file: `${repoRoot}/${file.path}`, root: shown.projectRoot }
+    const item: PressedItem = { kind: 'changedFile', key: `Changed:${file.path}`, label: name, values, cwd: repoRoot, file }
 
-  return [...part('Changed', [{ kind: 'changed', files: shown.changed, repoRoot: shown.repoRoot!, openPath: opened?.path }]), ...diffPart]
+    return { path: file.path, name, item, isSelected: item.key === selected }
+  })
+
+  return [{ kind: 'changed', files }]
 }
 
-function tasksPart(shown: SessionView, selected: string | null): Row[] {
-  return part(shown.mode ? `Tasks (/${shown.mode})` : 'Tasks', shown.note ? [inactive(shown.note)] : lineRows('Tasks', shown.lines, selected))
-}
+// Permission and agent lines: their placeholders are the line and the project folder.
+function textLines(shown: SessionView, kind: 'permission' | 'agent', lines: string[], pick: Chosen): Row[] {
+  const partName = kind === 'permission' ? 'Permissions' : 'Agents'
+  const color: ThemeKey | undefined = kind === 'permission' ? 'permission' : undefined
 
-// Pressable lines, each keyed "<part>:<line>", so a press names the line it selects.
-function lineRows(partName: string, lines: string[], selected: string | null, color?: ThemeKey): Row[] {
   return lines.map(text => {
-    const key = `${partName}:${text}`
+    const item: PressedItem = { kind, key: `${partName}:${text}`, label: text, values: { text, root: shown.projectRoot }, cwd: shown.projectRoot }
 
-    return { kind: 'line', text, color, key, isSelected: key === selected }
+    return { kind: 'line', text, color, item, isSelected: item.key === pick.selected }
   })
 }
 
-// A part's header and rows; nothing when it has no row.
-function part(name: string, rows: readonly Row[]): Row[] {
-  return rows.length === 0 ? [] : [{ kind: 'header', name }, ...rows]
+function taskRows(shown: SessionView, pick: Chosen): Row[] {
+  if (shown.note) return [inactive(shown.note)]
+  const taskFile = shown.taskFile ?? ''
+
+  return shown.lines.map(task => {
+    const values = { text: task.text.trim(), id: task.id ?? '', line: String(task.line), path: taskFile, file: `${shown.projectRoot}/${taskFile}`, root: shown.projectRoot }
+    const item: PressedItem = { kind: 'task', key: `Tasks:${task.text}`, label: task.id ?? task.text.trim(), values, cwd: shown.projectRoot }
+
+    return { kind: 'line', text: task.text, item, isSelected: item.key === pick.selected }
+  })
 }
 
 function inactive(text: string): Row {
@@ -431,37 +459,4 @@ function extensionColor(name: string): ThemeKey | undefined {
 
 function fileName(path: string) {
   return path.split('/').pop()!
-}
-
-// A press on the open file's name closes its diff; a press on another file's name opens that one's.
-async function diffToggle($: EngineInterface, repoRoot: string, file: ChangedFile) {
-  if ((await read($, diff))?.path === file.path) return update($, diff, () => null)
-  const source = await fileDiff($, repoRoot, file)
-  await update($, diff, () => ({ path: file.path, source }))
-}
-
-// Staged and unstaged changes against HEAD; an untracked file whole, as added lines. Git's text without its hunks
-// (binary file, error) as is: Code draws a source with no hunk as plain text.
-// rule: CR stripped; Code refuses control characters other than tab and newline.
-async function fileDiff($: EngineInterface, repoRoot: string, file: ChangedFile) {
-  const argv = file.isUntracked ? ['git', 'diff', '--no-index', '--', '/dev/null', file.path] : ['git', 'diff', 'HEAD', '--', file.path]
-  const ran = await $.process.run(argv, { cwd: repoRoot })
-  const text = (ran.stdout || ran.stderr).replace(/\r/g, '').trimEnd()
-  const firstHunk = text.search(/^@@/m)
-
-  return (firstHunk < 0 ? text : text.slice(firstHunk)) || 'No difference.'
-}
-
-// A press on the selected line clears the selection; a press on another line selects that one.
-async function selectionToggle($: EngineInterface, key: string) {
-  await update($, selection, now => (now === key ? null : key))
-}
-
-// What `build` returns, or the error it throws.
-function attempt<T>(build: () => T): T | Error {
-  try {
-    return build()
-  } catch (error) {
-    return error instanceof Error ? error : new Error(String(error))
-  }
 }

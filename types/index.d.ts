@@ -1,25 +1,32 @@
 // What the pane shows, top to bottom: changed files, running agents, tasks. A part the options hide stays empty.
 export type SessionView = {
+  // The project folder: where task files, commands and {root} start.
+  projectRoot: string
   // Files `git status` lists as changed or untracked; empty outside a git repo.
   changed: ChangedFile[]
   // Repo folder the changed paths start at; absent outside a git repo.
   repoRoot?: string
   // One line per running agent ("Opus:Explore - name"; a sub agent indented, "└ " first), then one per background task.
   agents: string[]
-  // One line per open task: "<id padded to 5>: <title>", or the title alone when the format gives no id.
-  lines: string[]
+  // The open tasks, in the order the pane shows them.
+  lines: TaskLine[]
+  // The task file the lines come from, from the project folder; absent when none was found.
+  taskFile?: string
   // The run whose filter file picks the lines ('plan', 'fix'); absent: no filter, every task shows.
   mode?: string
   // Shown in place of the task lines: a bad task pattern.
   note?: string
 }
 
+// One open task. `text`: "<id padded to 5>: <title>", or the title alone when the format gives no id. `line`: 1-based, in the task file.
+export type TaskLine = { text: string; id?: string; line: number }
+
 // A file `git status` lists; path from the repo root, '/' separated.
 export type ChangedFile = { path: string; isUntracked: boolean }
 
-// The diff shown under the changed files after a press on a file's name; null: none open.
-// `source`: the diff from its first hunk on, drawn by Code; git's text when it has no hunk.
-export type FileDiff = { path: string; source: string }
+// The section a press opened under its part: a diff, or a command's output. `key`: the pressed item's selection key.
+// `path`: the file a diff colors its code as.
+export type Output = { key: string; title: string; source: string; format: 'diff' | 'text'; path?: string }
 
 // Background tasks still running, task id to pane line ("shell - Run tests").
 export type BackgroundTasks = Record<string, string>
@@ -33,7 +40,7 @@ declare module 'claude-code' {
       view: Shaped<SessionView>
       tasks: Shaped<BackgroundTasks>
       permissions: Shaped<OpenPermissions>
-      diff: Shaped<FileDiff | null>
+      output: Shaped<Output | null>
       selection: Shaped<string | null>
     }
   }
