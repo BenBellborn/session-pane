@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PluginOptions, Register, ThemeKey } from 'claude-code'
+import type { EngineInterface, PluginOptions, Register, RenderChildren, ThemeKey } from 'claude-code'
 
 import type { BackgroundTasks, ChangedFile, OpenPermissions, Output, SessionView, TaskLine } from '../types'
 import { configEnsure, itemPress } from './press'
@@ -109,19 +109,23 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Code, Text } = $.ui.resolve(e)
     const rows = paneRows(await read($, view), Object.values(await read($, permissions)), await read($, output), await read($, selection))
+    const shade = shadesOf(await themeName($))
+    // A pressable label in a keyed Box: the pointer lights its line with the hover shade, a selected one stays on its own shade.
+    const pressable = (item: PressedItem, isSelected: boolean | undefined, label: (style: object) => RenderChildren) => (
+      <Box key={`row:${item.key}`} hover={{ backgroundColor: isSelected ? shade.selected : shade.hover }}>
+        <Button key={item.key} plain onPress={() => itemPress($, item)}>
+          {label({ ...(isSelected ? { backgroundColor: shade.selected } : {}), hover: { inverse: false } })}
+        </Button>
+      </Box>
+    )
     const fileButtons = (files: FileButton[]) =>
       files.flatMap((file, i) => [
         ...(i === 0 ? [] : [<Text color="inactive">, </Text>]),
-        <Button key={file.item.key} plain onPress={() => itemPress($, file.item)}>
-          <Text color={extensionColor(file.path)} {...selectedStyle(file.isSelected)}>{file.name}</Text>
-        </Button>,
+        pressable(file.item, file.isSelected, style => <Text color={extensionColor(file.path)} {...style}>{file.name}</Text>),
       ])
-    // A selected line is padded to the pane's width, so its highlight spans the line.
-    const pressableLine = (row: Extract<Row, { kind: 'line' }>, item: PressedItem) => (
-      <Button key={item.key} plain onPress={() => itemPress($, item)}>
-        <Text color={row.color} {...selectedStyle(row.isSelected)} wrap="truncate-end">{row.isSelected ? row.text.padEnd(e.props.bodyColumns) : row.text}</Text>
-      </Button>
-    )
+    // A pressable line is padded to the pane's width, so its hover and selection shade span the line.
+    const pressableLine = (row: Extract<Row, { kind: 'line' }>, item: PressedItem) =>
+      pressable(item, row.isSelected, style => <Text color={row.color} {...style} wrap="truncate-end">{row.text.padEnd(e.props.bodyColumns)}</Text>)
     // A part's header fills the pane's width: "── Agents ───────".
     const draw = (row: Row) => {
       switch (row.kind) {
@@ -385,9 +389,18 @@ function inputSummary(input: unknown) {
   return String(named ?? JSON.stringify(input)).replace(/\s+/g, ' ')
 }
 
-// A selected item's style: a background and bold, never inverse, so it differs from the host's pointer hover (an inverse).
-function selectedStyle(isSelected: boolean | undefined) {
-  return isSelected ? { backgroundColor: 'suggestion' as const, bold: true } : {}
+// Shades a little off the theme's background, never inverse: hover 5 %, selection 10 % toward the other end.
+const DARK_SHADES = { hover: '#0d0d0d', selected: '#1a1a1a' }
+const LIGHT_SHADES = { hover: '#f2f2f2', selected: '#e6e6e6' }
+
+function shadesOf(theme: string) {
+  return theme.startsWith('light') ? LIGHT_SHADES : DARK_SHADES
+}
+
+// The /config theme row's value ('dark', 'light-daltonized', ...); none: 'dark'.
+async function themeName($: EngineInterface) {
+  const row = (await $.config.list().catch(() => [])).find(r => r.key === 'theme')
+  return String(row?.value ?? 'dark')
 }
 
 // The pane's rows: each part with something to show, under its header, and the open section under the part of its item.

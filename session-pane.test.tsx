@@ -75,12 +75,13 @@ function mockEngine(on: On, files: Files) {
 }
 
 // The pane's shown parts, header name ("Tasks (/fix)") to the lines under it, in pane order. `before` runs once the session started.
+// A pressable line is padded to the pane width; the padding is cut off here.
 async function paneParts($: Engine, on: On, before?: () => Promise<unknown>) {
   const parts = new Map<string, string[]>()
   let lines: string[] = []
   for (const text of await paneTexts($, on, before)) {
     if (text.startsWith('── ')) parts.set(text.slice(3).replace(/[ ─]+$/, ''), (lines = []))
-    else lines.push(text)
+    else lines.push(text.replace(/ {2,}$/, ''))
   }
 
   return parts
@@ -415,12 +416,12 @@ test('a new prompt keeps every denied call', HEADING, async ($, on) => {
   expect((await paneParts($, on, denyAndPrompt)).get('Permissions')).toEqual(['Bash: git push origin main'])
 })
 
-// Each highlighted Text after the presses: drawn on the selection background, never inverse (the host's hover is inverse).
+// Each highlighted Text after the presses: drawn on the dark theme's selection shade, never inverse.
 async function highlighted($: Engine, on: On, presses: string[], before?: () => Promise<unknown>) {
   const texts = await paneTextElements($, on, before, presses)
 
   expect(texts.filter(t => t.props.inverse)).toEqual([])
-  return texts.filter(t => t.props.backgroundColor === 'suggestion').map(t => t.text)
+  return texts.filter(t => t.props.backgroundColor === '#1a1a1a').map(t => t.text)
 }
 
 const SCOUT = { status: 'running', type: 'Explore', model: 'claude-opus-5-5', name: 'scout', description: 'find it' }
@@ -463,6 +464,18 @@ test('a press on a permission line highlights it', HEADING, async ($, on) => {
   expect(await highlighted($, on, ['Permissions:Bash: git push origin main'], judged($, on, [[PUSH, 'deny']]))).toEqual([
     'Bash: git push origin main'.padEnd(10),
   ])
+})
+
+test('a selected line sits 10 % off the theme background, darker under a light theme', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: ' M src/a.py\0' })
+  on('config.list', () => ({ value: [{ key: 'theme', value: 'light' }] }) as never)
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: 'Changed:src/a.py' })
+  const texts = await ui.findAll({ type: 'Text' })
+  await ui.unmount()
+
+  expect(texts.filter(t => t.props.backgroundColor === '#e6e6e6').map(t => t.text)).toEqual(['a.py'])
 })
 
 const TASK_46 = 'Tasks:   46: 🟡 [Refactor] Domain-first names'
