@@ -29,6 +29,12 @@ export type OpenPermissions = Record<string, string>
 
 declare module 'claude-code' {
   interface PluginState {
-    'session-pane': { view: Shaped<SessionView>; tasks: Shaped<BackgroundTasks>; permissions: Shaped<OpenPermissions>; diff: Shaped<FileDiff | null> }
+    'session-pane': {
+      view: Shaped<SessionView>
+      tasks: Shaped<BackgroundTasks>
+      permissions: Shaped<OpenPermissions>
+      diff: Shaped<FileDiff | null>
+      selection: Shaped<string | null>
+    }
   }
 }

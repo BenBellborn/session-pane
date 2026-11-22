@@ -5,11 +5,11 @@ A Claude Code pane beside the chat that shows what the session does now. It refr
 | Part | Shows |
 |---|---|
 | Permissions | Calls auto mode denied. A line drops out when a later call of the same tool and input is allowed. |
-| Changed | Files `git status` lists as changed or untracked, colored by file type. Press a name to see its diff against `HEAD`; press again to close it. |
+| Changed | Files `git status` lists as changed or untracked, colored by file type. Press a name to see its diff against `HEAD`; press again to close it. The open file's name is highlighted. |
 | Agents | Running agents as `<model>:<agent type> - <name>`, sub agents indented under their parent, then background shell, monitor and workflow tasks. |
 | Tasks | Open tasks of the first task file found in the project. |
 
-A part with nothing to show is hidden. Open the pane with `/session-pane`. It also opens when an interactive session starts.
+A part with nothing to show is hidden. Press a Permissions, Agents or Tasks line to highlight it; press it again to clear it. Open the pane with `/session-pane`. It also opens when an interactive session starts.
 
 ## Install
 

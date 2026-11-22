@@ -13,6 +13,8 @@ const tasks = atom({ plugin: 'session-pane', key: 'tasks' } as const, {} as Back
 // Calls auto mode denied, kept until /permissions retries them. A retry is a new call with a new tool_use_id,
 // so a denial is matched on agent, tool and input.
 const permissions = atom({ plugin: 'session-pane', key: 'permissions' } as const, {} as OpenPermissions, { shape: 'permissions-1' })
+// The key of the one pressed line drawn highlighted ("Agents:<line>"); null: none.
+const selection = atom({ plugin: 'session-pane', key: 'selection' } as const, null as string | null, { shape: 'selection-1' })
 // A task's end notice: "<task-notification><task-id>b1</task-id>...<status>completed</status>...</task-notification>".
 // One delivery can hold several.
 const NOTICE = /<task-notification>([\s\S]*?)<\/task-notification>/g
@@ -51,8 +53,10 @@ type Settings = {
 // One pane row, top to bottom; the render hook draws each kind.
 type Row =
   | { kind: 'header'; name: string }
-  | { kind: 'line'; text: string; color?: ThemeKey }
-  | { kind: 'changed'; files: ChangedFile[]; repoRoot: string }
+  // A line with a key is pressable: a press selects it, a second press clears it.
+  | { kind: 'line'; text: string; color?: ThemeKey; key?: string; isSelected?: boolean }
+  // `openPath`: the file whose diff is open, drawn highlighted.
+  | { kind: 'changed'; files: ChangedFile[]; repoRoot: string; openPath?: string }
   | { kind: 'diff'; diff: FileDiff }
 
 export const register: Register = (on, options) => {
@@ -93,23 +97,29 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Code, Text } = $.ui.resolve(e)
-    const rows = paneRows(await read($, view), Object.values(await read($, permissions)), await read($, diff))
-    const changedNames = (files: ChangedFile[], repoRoot: string) =>
-      files.flatMap((file, i) => [
+    const rows = paneRows(await read($, view), Object.values(await read($, permissions)), await read($, diff), await read($, selection))
+    const changedNames = (row: Extract<Row, { kind: 'changed' }>) =>
+      row.files.flatMap((file, i) => [
         ...(i === 0 ? [] : [<Text color="inactive">, </Text>]),
-        <Button key={file.path} plain onPress={() => diffToggle($, repoRoot, file)}>
-          <Text color={extensionColor(file.path)}>{fileName(file.path)}</Text>
+        <Button key={file.path} plain onPress={() => diffToggle($, row.repoRoot, file)}>
+          <Text color={extensionColor(file.path)} inverse={file.path === row.openPath}>{fileName(file.path)}</Text>
         </Button>,
       ])
+    // A selected line is padded to the pane's width, so its highlight spans the line.
+    const pressableLine = (row: Extract<Row, { kind: 'line' }>, key: string) => (
+      <Button key={key} plain onPress={() => selectionToggle($, key)}>
+        <Text color={row.color} inverse={row.isSelected} wrap="truncate-end">{row.isSelected ? row.text.padEnd(e.props.bodyColumns) : row.text}</Text>
+      </Button>
+    )
     // A part's header fills the pane's width: "── Agents ───────".
     const draw = (row: Row) => {
       switch (row.kind) {
         case 'header':
           return <Text color="inactive">{`── ${row.name} `.padEnd(Math.max(row.name.length + 4, e.props.bodyColumns), '─')}</Text>
         case 'line':
-          return <Text color={row.color} wrap="truncate-end">{row.text}</Text>
+          return row.key ? pressableLine(row, row.key) : <Text color={row.color} wrap="truncate-end">{row.text}</Text>
         case 'changed':
-          return <Box flexDirection="row" flexWrap="wrap">{changedNames(row.files, row.repoRoot)}</Box>
+          return <Box flexDirection="row" flexWrap="wrap">{changedNames(row)}</Box>
         case 'diff':
           return <Code source={row.diff.source} format="diff" path={row.diff.path} wrap="truncate-end" />
       }
@@ -372,8 +382,13 @@ function inputSummary(input: unknown) {
 }
 
 // The pane's rows: each part with something to show, under its header. A part the settings hide is empty: sync fills none.
-function paneRows(shown: SessionView, asks: string[], opened: FileDiff | null): Row[] {
-  const rows = [...part('Permissions', lineRows(asks, 'permission')), ...changedPart(shown, opened), ...part('Agents', lineRows(shown.agents)), ...tasksPart(shown)]
+function paneRows(shown: SessionView, asks: string[], opened: FileDiff | null, selected: string | null): Row[] {
+  const rows = [
+    ...part('Permissions', lineRows('Permissions', asks, selected, 'permission')),
+    ...changedPart(shown, opened),
+    ...part('Agents', lineRows('Agents', shown.agents, selected)),
+    ...tasksPart(shown, selected),
+  ]
 
   return rows.length === 0 ? [inactive('Nothing to show.')] : rows
 }
@@ -383,15 +398,20 @@ function changedPart(shown: SessionView, opened: FileDiff | null): Row[] {
   if (shown.changed.length === 0) return []
   const diffPart = opened ? part(`Diff ${fileName(opened.path)}`, [{ kind: 'diff', diff: opened }]) : []
 
-  return [...part('Changed', [{ kind: 'changed', files: shown.changed, repoRoot: shown.repoRoot! }]), ...diffPart]
+  return [...part('Changed', [{ kind: 'changed', files: shown.changed, repoRoot: shown.repoRoot!, openPath: opened?.path }]), ...diffPart]
 }
 
-function tasksPart(shown: SessionView): Row[] {
-  return part(shown.mode ? `Tasks (/${shown.mode})` : 'Tasks', shown.note ? [inactive(shown.note)] : lineRows(shown.lines))
+function tasksPart(shown: SessionView, selected: string | null): Row[] {
+  return part(shown.mode ? `Tasks (/${shown.mode})` : 'Tasks', shown.note ? [inactive(shown.note)] : lineRows('Tasks', shown.lines, selected))
 }
 
-function lineRows(lines: string[], color?: ThemeKey): Row[] {
-  return lines.map(text => ({ kind: 'line', text, color }))
+// Pressable lines, each keyed "<part>:<line>", so a press names the line it selects.
+function lineRows(partName: string, lines: string[], selected: string | null, color?: ThemeKey): Row[] {
+  return lines.map(text => {
+    const key = `${partName}:${text}`
+
+    return { kind: 'line', text, color, key, isSelected: key === selected }
+  })
 }
 
 // A part's header and rows; nothing when it has no row.
@@ -430,6 +450,11 @@ async function fileDiff($: EngineInterface, repoRoot: string, file: ChangedFile)
   const firstHunk = text.search(/^@@/m)
 
   return (firstHunk < 0 ? text : text.slice(firstHunk)) || 'No difference.'
+}
+
+// A press on the selected line clears the selection; a press on another line selects that one.
+async function selectionToggle($: EngineInterface, key: string) {
+  await update($, selection, now => (now === key ? null : key))
 }
 
 // What `build` returns, or the error it throws.

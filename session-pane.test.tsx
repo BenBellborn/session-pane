@@ -406,3 +406,52 @@ test('a new prompt keeps every denied call', HEADING, async ($, on) => {
 
   expect((await paneParts($, on, denyAndPrompt)).get('Permissions')).toEqual(['Bash: git push origin main'])
 })
+
+// Each highlighted Text after the presses: its text and whether it is drawn inverse.
+async function highlighted($: Engine, on: On, presses: string[], before?: () => Promise<unknown>) {
+  const texts = await paneTextElements($, on, before, presses)
+
+  return texts.filter(t => t.props.inverse).map(t => t.text)
+}
+
+const SCOUT = { status: 'running', type: 'Explore', model: 'claude-opus-5-5', name: 'scout', description: 'find it' }
+
+test('a press on a changed file highlights its name only', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: [' M src/a.py', ' M b.md', ''].join('\0'), diff: DIFF })
+
+  expect(await highlighted($, on, ['src/a.py'])).toEqual(['a.py'])
+})
+
+test('a second press on a changed file clears its highlight', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: [' M src/a.py', ''].join('\0'), diff: DIFF })
+
+  expect(await highlighted($, on, ['src/a.py', 'src/a.py'])).toEqual([])
+})
+
+test('a press on an agent line highlights the full line', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, agents: [SCOUT] })
+
+  expect(await highlighted($, on, ['Agents:Opus:Explore - scout'])).toEqual(['Opus:Explore - scout'.padEnd(10)])
+})
+
+test('a press on a task line moves the highlight there from the line selected before', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, agents: [SCOUT] })
+
+  expect(await highlighted($, on, ['Agents:Opus:Explore - scout', 'Tasks:   46: 🟡 [Refactor] Domain-first names'])).toEqual([
+    '   46: 🟡 [Refactor] Domain-first names',
+  ])
+})
+
+test('a second press on a selected line clears its highlight', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  expect(await highlighted($, on, ['Tasks:   46: 🟡 [Refactor] Domain-first names', 'Tasks:   46: 🟡 [Refactor] Domain-first names'])).toEqual([])
+})
+
+test('a press on a permission line highlights it', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  expect(await highlighted($, on, ['Permissions:Bash: git push origin main'], judged($, on, [[PUSH, 'deny']]))).toEqual([
+    'Bash: git push origin main'.padEnd(10),
+  ])
+})
