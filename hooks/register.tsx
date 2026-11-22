@@ -388,9 +388,9 @@ function inputSummary(input: unknown) {
   return String(named ?? JSON.stringify(input)).replace(/\s+/g, ' ')
 }
 
-// The selection shade: 10 % off the theme's background toward the other end, never inverse.
+// The selection shade: 25 % off the theme's background toward the other end, never inverse.
 function selectedShadeOf(theme: string) {
-  return theme.startsWith('light') ? '#e6e6e6' : '#1a1a1a'
+  return theme.startsWith('light') ? '#bfbfbf' : '#404040'
 }
 
 // The /config theme row's value ('dark', 'light-daltonized', ...); none: 'dark'.

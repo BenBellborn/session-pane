@@ -420,7 +420,7 @@ async function highlighted($: Engine, on: On, presses: string[], before?: () => 
   const texts = await paneTextElements($, on, before, presses)
 
   expect(texts.filter(t => t.props.inverse)).toEqual([])
-  return texts.filter(t => t.props.backgroundColor === '#1a1a1a').map(t => t.text)
+  return texts.filter(t => t.props.backgroundColor === '#404040').map(t => t.text)
 }
 
 const SCOUT = { status: 'running', type: 'Explore', model: 'claude-opus-5-5', name: 'scout', description: 'find it' }
@@ -465,7 +465,7 @@ test('a press on a permission line highlights it', HEADING, async ($, on) => {
   ])
 })
 
-test('a selected line sits 10 % off the theme background, darker under a light theme', HEADING, async ($, on) => {
+test('a selected line sits 25 % off the theme background, darker under a light theme', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, git: ' M src/a.py\0' })
   on('config.list', () => ({ value: [{ key: 'theme', value: 'light' }] }) as never)
 
@@ -474,7 +474,7 @@ test('a selected line sits 10 % off the theme background, darker under a light t
   const texts = await ui.findAll({ type: 'Text' })
   await ui.unmount()
 
-  expect(texts.filter(t => t.props.backgroundColor === '#e6e6e6').map(t => t.text)).toEqual(['a.py'])
+  expect(texts.filter(t => t.props.backgroundColor === '#bfbfbf').map(t => t.text)).toEqual(['a.py'])
 })
 
 const TASK_46 = 'Tasks:   46: 🟡 [Refactor] Domain-first names'
