@@ -109,14 +109,12 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Code, Text } = $.ui.resolve(e)
     const rows = paneRows(await read($, view), Object.values(await read($, permissions)), await read($, output), await read($, selection))
-    const shade = shadesOf(await themeName($))
-    // A pressable label in a keyed Box: the pointer lights its line with the hover shade, a selected one stays on its own shade.
+    const selectedShade = selectedShadeOf(await themeName($))
+    // A pressable label; a selected one sits on the selection shade.
     const pressable = (item: PressedItem, isSelected: boolean | undefined, label: (style: object) => RenderChildren) => (
-      <Box key={`row:${item.key}`} hover={{ backgroundColor: isSelected ? shade.selected : shade.hover }}>
-        <Button key={item.key} plain onPress={() => itemPress($, item)}>
-          {label({ ...(isSelected ? { backgroundColor: shade.selected } : {}), hover: { inverse: false } })}
-        </Button>
-      </Box>
+      <Button key={item.key} plain onPress={() => itemPress($, item)}>
+        {label(isSelected ? { backgroundColor: selectedShade } : {})}
+      </Button>
     )
     const fileButtons = (files: FileButton[]) =>
       files.flatMap((file, i) => [
@@ -124,7 +122,7 @@ export const register: Register = (on, options) => {
         pressable(file.item, file.isSelected, style => <Text color={extensionColor(file.path)} {...style}>{file.name}</Text>),
       ])
     // Only a selected line is padded to the pane's width: the host inverts a Button's label under the pointer, so an unpadded label
-    // keeps that inversion on its text, and the keyed Box's hover shade fills the rest of the line.
+    // keeps that inversion on its text.
     const pressableLine = (row: Extract<Row, { kind: 'line' }>, item: PressedItem) =>
       pressable(item, row.isSelected, style => <Text color={row.color} {...style} wrap="truncate-end">{row.isSelected ? row.text.padEnd(e.props.bodyColumns) : row.text}</Text>)
     // A part's header fills the pane's width: "── Agents ───────".
@@ -390,12 +388,9 @@ function inputSummary(input: unknown) {
   return String(named ?? JSON.stringify(input)).replace(/\s+/g, ' ')
 }
 
-// Shades a little off the theme's background, never inverse: hover 5 %, selection 10 % toward the other end.
-const DARK_SHADES = { hover: '#0d0d0d', selected: '#1a1a1a' }
-const LIGHT_SHADES = { hover: '#f2f2f2', selected: '#e6e6e6' }
-
-function shadesOf(theme: string) {
-  return theme.startsWith('light') ? LIGHT_SHADES : DARK_SHADES
+// The selection shade: 10 % off the theme's background toward the other end, never inverse.
+function selectedShadeOf(theme: string) {
+  return theme.startsWith('light') ? '#e6e6e6' : '#1a1a1a'
 }
 
 // The /config theme row's value ('dark', 'light-daltonized', ...); none: 'dark'.
