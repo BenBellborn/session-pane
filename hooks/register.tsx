@@ -123,9 +123,10 @@ export const register: Register = (on, options) => {
         ...(i === 0 ? [] : [<Text color="inactive">, </Text>]),
         pressable(file.item, file.isSelected, style => <Text color={extensionColor(file.path)} {...style}>{file.name}</Text>),
       ])
-    // A pressable line is padded to the pane's width, so its hover and selection shade span the line.
+    // Only a selected line is padded to the pane's width: the host inverts a Button's label under the pointer, so an unpadded label
+    // keeps that inversion on its text, and the keyed Box's hover shade fills the rest of the line.
     const pressableLine = (row: Extract<Row, { kind: 'line' }>, item: PressedItem) =>
-      pressable(item, row.isSelected, style => <Text color={row.color} {...style} wrap="truncate-end">{row.text.padEnd(e.props.bodyColumns)}</Text>)
+      pressable(item, row.isSelected, style => <Text color={row.color} {...style} wrap="truncate-end">{row.isSelected ? row.text.padEnd(e.props.bodyColumns) : row.text}</Text>)
     // A part's header fills the pane's width: "── Agents ───────".
     const draw = (row: Row) => {
       switch (row.kind) {

@@ -75,13 +75,12 @@ function mockEngine(on: On, files: Files) {
 }
 
 // The pane's shown parts, header name ("Tasks (/fix)") to the lines under it, in pane order. `before` runs once the session started.
-// A pressable line is padded to the pane width; the padding is cut off here.
 async function paneParts($: Engine, on: On, before?: () => Promise<unknown>) {
   const parts = new Map<string, string[]>()
   let lines: string[] = []
   for (const text of await paneTexts($, on, before)) {
     if (text.startsWith('── ')) parts.set(text.slice(3).replace(/[ ─]+$/, ''), (lines = []))
-    else lines.push(text.replace(/ {2,}$/, ''))
+    else lines.push(text)
   }
 
   return parts
