@@ -66,19 +66,21 @@ function mockEngine(on: On, files: Files) {
   })
 }
 
-// The pane's three parts, split at their header lines: changed files, agents, tasks. `before` runs once the session started.
+// The pane's shown parts, header name ("Tasks (/fix)") to the lines under it, in pane order. `before` runs once the session started.
 async function paneParts($: Engine, on: On, before?: () => Promise<unknown>) {
-  const parts: string[][] = []
+  const parts = new Map<string, string[]>()
+  let lines: string[] = []
   for (const text of await paneTexts($, on, before)) {
-    if (text.startsWith('── ')) parts.push([])
-    else parts[parts.length - 1]!.push(text)
+    if (text.startsWith('── ')) parts.set(text.slice(3).replace(/[ ─]+$/, ''), (lines = []))
+    else lines.push(text)
   }
 
   return parts
 }
 
+// The lines of the Tasks part; undefined when the part is hidden.
 async function paneLines($: Engine, on: On) {
-  return (await paneParts($, on))[2]
+  return [...(await paneParts($, on))].find(([name]) => name.startsWith('Tasks'))?.[1]
 }
 
 // The shown text of each top-level Text; a Text nested in another one is part of its parent's text.
@@ -140,18 +142,28 @@ test('a filter shows only its tasks, in its order; a task gone from TODO.md drop
   ])
 })
 
-test('a filter with no task left names its run', HEADING, async ($, on) => {
-  mockEngine(on, { todo: TODO, state: { mode: 'plan', ids: [] } })
+test('a filter names its run in the Tasks header', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, state: { mode: 'plan', ids: ['18'] } })
 
-  const texts = await paneTexts($, on)
-  expect(texts).toContain('── Tasks (/plan) ')
-  expect(texts.at(-1)).toBe('None')
+  expect([...(await paneParts($, on)).keys()]).toEqual(['Tasks (/plan)'])
 })
 
-test('a project with no task file names the files it looked for', HEADING, async ($, on) => {
+test('a filter with no task left hides the Tasks part', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, state: { mode: 'plan', ids: [] } })
+
+  expect(await paneLines($, on)).toBeUndefined()
+})
+
+test('a project with no task file hides the Tasks part', HEADING, async ($, on) => {
+  mockEngine(on, { git: '' })
+
+  expect(await paneLines($, on)).toBeUndefined()
+})
+
+test('with nothing to show in any part, the pane says so', async ($, on) => {
   mockEngine(on, {})
 
-  expect(await paneLines($, on)).toEqual(['No TODO.md or docs/TODO.md.'])
+  expect(await paneTexts($, on)).toEqual(['Nothing to show.'])
 })
 
 const CHECKBOXES = ['# TODO', '- [ ] Write the docs', '- [x] Pick a name', '  * [ ] Nested item', 'Text - [ ] not at line start'].join('\n')
@@ -199,19 +211,16 @@ test('the filter file sits under CLAUDE_CONFIG_DIR when it is set', HEADING, asy
   expect(await paneLines($, on)).toEqual(['   18: 🔴 [Bug] [Planned] Make every legend reach the AI'])
 })
 
-test('outside a git repo and with no agents, the top parts say so', HEADING, async ($, on) => {
-  mockEngine(on, { todo: TODO })
+test('with no changed file and no running agent, those parts are hidden', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: '' })
 
-  const parts = await paneParts($, on)
-  expect(parts.length).toBe(3)
-  expect(parts[0]).toEqual(['None'])
-  expect(parts[1]).toEqual(['None'])
+  expect([...(await paneParts($, on)).keys()]).toEqual(['Tasks'])
 })
 
 test('changed files show by name on one line; a rename shows its new name', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, git: [' M src/a.py', '?? docs/new.md', 'R  lib/b2.py', 'lib/b.py', '?? build/out', ''].join('\0') })
 
-  expect((await paneParts($, on))[0]!.join('')).toBe('a.py, new.md, b2.py, out')
+  expect((await paneParts($, on)).get('Changed')!.join('')).toBe('a.py, new.md, b2.py, out')
 })
 
 test('each changed file shows in its extension color and the commas in the theme gray', HEADING, async ($, on) => {
@@ -226,7 +235,7 @@ test('each changed file shows in its extension color and the commas in the theme
     ['new.md', 'permission'],
     [', ', 'inactive'],
     ['out', undefined],
-    ['── Agents ', 'inactive'],
+    ['── Tasks ─', 'inactive'],
   ])
 })
 
@@ -276,7 +285,7 @@ test('each running agent shows as model family, type and name; ended agents drop
     ],
   })
 
-  expect((await paneParts($, on))[1]).toEqual(['Opus:Explore - scout', 'Haiku:general-purpose - search docs'])
+  expect((await paneParts($, on)).get('Agents')).toEqual(['Opus:Explore - scout', 'Haiku:general-purpose - search docs'])
 })
 
 test('a sub agent shows indented under the agent that started it', HEADING, async ($, on) => {
@@ -289,7 +298,7 @@ test('a sub agent shows indented under the agent that started it', HEADING, asyn
     ],
   })
 
-  expect((await paneParts($, on))[1]).toEqual(['Opus:Plan - lead', '└ Haiku:Explore - find files', 'Sonnet:Explore - other'])
+  expect((await paneParts($, on)).get('Agents')).toEqual(['Opus:Plan - lead', '└ Haiku:Explore - find files', 'Sonnet:Explore - other'])
 })
 
 // A Monitor task and a background Bash task, started once the session started.
@@ -306,7 +315,7 @@ function backgroundStart($: Engine, on: On) {
 test('a background task shows under the agents', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO })
 
-  expect((await paneParts($, on, backgroundStart($, on)))[1]).toEqual(['monitor - Watch the build', 'shell - Build the app'])
+  expect((await paneParts($, on, backgroundStart($, on))).get('Agents')).toEqual(['monitor - Watch the build', 'shell - Build the app'])
 })
 
 test('a shell task drops out when its end notice comes in as a prompt', HEADING, async ($, on) => {
@@ -323,7 +332,7 @@ test('a shell task drops out when its end notice comes in as a prompt', HEADING,
     } as never)
   }
 
-  expect((await paneParts($, on, startAndEnd))[1]).toEqual(['monitor - Watch the build'])
+  expect((await paneParts($, on, startAndEnd)).get('Agents')).toEqual(['monitor - Watch the build'])
 })
 
 test('a background task drops out at its end notice', HEADING, async ($, on) => {
@@ -338,7 +347,7 @@ test('a background task drops out at its end notice', HEADING, async ($, on) => 
     } as never)
   }
 
-  expect((await paneParts($, on, startAndEnd))[1]).toEqual(['shell - Build the app'])
+  expect((await paneParts($, on, startAndEnd)).get('Agents')).toEqual(['shell - Build the app'])
 })
 
 const PUSH = { tool: 'Bash', input: { command: 'git push\n  origin main' } }
@@ -358,20 +367,20 @@ test('each call auto mode denied shows as one line under a Permissions header at
   mockEngine(on, { todo: TODO })
 
   const texts = await paneTexts($, on, judged($, on, [[PUSH, 'deny'], [WRITE, 'deny']]))
-  expect(texts.slice(0, 4)).toEqual(['── Permissions ', 'Bash: git push origin main', 'Write: C:/proj/a.py', '── Changed '])
+  expect(texts.slice(0, 4)).toEqual(['── Permissions ', 'Bash: git push origin main', 'Write: C:/proj/a.py', '── Tasks ─'])
 })
 
 test('with no denied call, no Permissions part shows', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO })
 
-  expect((await paneParts($, on, judged($, on, [[PUSH, 'allow']]))).length).toBe(3)
+  expect((await paneParts($, on, judged($, on, [[PUSH, 'allow']]))).has('Permissions')).toBe(false)
 })
 
 test('a denied call the classifier allows later drops out; the others stay', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO })
 
   const parts = await paneParts($, on, judged($, on, [[PUSH, 'deny'], [WRITE, 'deny'], [PUSH, 'allow']]))
-  expect(parts[0]).toEqual(['Write: C:/proj/a.py'])
+  expect(parts.get('Permissions')).toEqual(['Write: C:/proj/a.py'])
 })
 
 test('a denied call a rule allows later drops out', HEADING, async ($, on) => {
@@ -383,7 +392,7 @@ test('a denied call a rule allows later drops out', HEADING, async ($, on) => {
     await $.tool.check(PUSH as never)
   }
 
-  expect((await paneParts($, on, denyAndRetry)).length).toBe(3)
+  expect((await paneParts($, on, denyAndRetry)).has('Permissions')).toBe(false)
 })
 
 test('a new prompt keeps every denied call', HEADING, async ($, on) => {
@@ -395,5 +404,5 @@ test('a new prompt keeps every denied call', HEADING, async ($, on) => {
     await $.prompt.submit({ text: 'go on' } as never)
   }
 
-  expect((await paneParts($, on, denyAndPrompt))[0]).toEqual(['Bash: git push origin main'])
+  expect((await paneParts($, on, denyAndPrompt)).get('Permissions')).toEqual(['Bash: git push origin main'])
 })

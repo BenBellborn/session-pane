@@ -10,7 +10,7 @@ export type SessionView = {
   lines: string[]
   // The run whose filter file picks the lines ('plan', 'fix'); absent: no filter, every task shows.
   mode?: string
-  // Shown in place of the task lines: no task file found, or a bad task pattern.
+  // Shown in place of the task lines: a bad task pattern.
   note?: string
 }
 

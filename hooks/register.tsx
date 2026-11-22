@@ -93,7 +93,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Code, Text } = $.ui.resolve(e)
-    const rows = paneRows(await read($, view), Object.values(await read($, permissions)), await read($, diff), settings)
+    const rows = paneRows(await read($, view), Object.values(await read($, permissions)), await read($, diff))
     const changedNames = (files: ChangedFile[], repoRoot: string) =>
       files.flatMap((file, i) => [
         ...(i === 0 ? [] : [<Text color="inactive">, </Text>]),
@@ -219,7 +219,7 @@ function modelFamily(model: string | undefined) {
 async function openTasks($: EngineInterface, projectRoot: string, filterFolder: string, settings: Settings): Promise<Pick<SessionView, 'lines' | 'mode' | 'note'>> {
   if (typeof settings.taskLine === 'string') return { lines: [], note: settings.taskLine }
   const text = await firstTaskFileRead($, projectRoot, settings.taskFiles)
-  if (text === undefined) return { lines: [], note: `No ${settings.taskFiles.join(' or ')}.` }
+  if (text === undefined) return { lines: [] }
 
   return arrange(taskLines(text, settings.taskLine), await filterRead($, filterFolder))
 }
@@ -371,28 +371,32 @@ function inputSummary(input: unknown) {
   return String(named ?? JSON.stringify(input)).replace(/\s+/g, ' ')
 }
 
-// The pane's rows: Permissions only while a call waits, then each part the settings show.
-function paneRows(shown: SessionView, asks: string[], opened: FileDiff | null, settings: Settings): Row[] {
-  const permissionRows: Row[] = asks.length === 0 ? [] : [{ kind: 'header', name: 'Permissions' }, ...asks.map(text => ({ kind: 'line', text, color: 'permission' }) as const)]
-  const tasksHeader: Row = { kind: 'header', name: shown.mode ? `Tasks (/${shown.mode})` : 'Tasks' }
+// The pane's rows: each part with something to show, under its header. A part the settings hide is empty: sync fills none.
+function paneRows(shown: SessionView, asks: string[], opened: FileDiff | null): Row[] {
+  const rows = [...part('Permissions', lineRows(asks, 'permission')), ...changedPart(shown, opened), ...part('Agents', lineRows(shown.agents)), ...tasksPart(shown)]
 
-  return [
-    ...permissionRows,
-    ...(settings.showChanged ? changedRows(shown, opened) : []),
-    ...(settings.showAgents ? [{ kind: 'header', name: 'Agents' } as const, ...linesOrNone(shown.agents)] : []),
-    ...(settings.showTasks ? [tasksHeader, ...(shown.note ? [inactive(shown.note)] : linesOrNone(shown.lines))] : []),
-  ]
+  return rows.length === 0 ? [inactive('Nothing to show.')] : rows
 }
 
-function changedRows(shown: SessionView, opened: FileDiff | null): Row[] {
-  const names: Row = shown.changed.length === 0 ? inactive('None') : { kind: 'changed', files: shown.changed, repoRoot: shown.repoRoot! }
-  const diffRows: Row[] = opened ? [{ kind: 'header', name: `Diff ${fileName(opened.path)}` }, { kind: 'diff', diff: opened }] : []
+// The changed file names, then the open diff under them; nothing while no file is changed.
+function changedPart(shown: SessionView, opened: FileDiff | null): Row[] {
+  if (shown.changed.length === 0) return []
+  const diffPart = opened ? part(`Diff ${fileName(opened.path)}`, [{ kind: 'diff', diff: opened }]) : []
 
-  return [{ kind: 'header', name: 'Changed' }, names, ...diffRows]
+  return [...part('Changed', [{ kind: 'changed', files: shown.changed, repoRoot: shown.repoRoot! }]), ...diffPart]
 }
 
-function linesOrNone(lines: string[]): Row[] {
-  return lines.length === 0 ? [inactive('None')] : lines.map(text => ({ kind: 'line', text }))
+function tasksPart(shown: SessionView): Row[] {
+  return part(shown.mode ? `Tasks (/${shown.mode})` : 'Tasks', shown.note ? [inactive(shown.note)] : lineRows(shown.lines))
+}
+
+function lineRows(lines: string[], color?: ThemeKey): Row[] {
+  return lines.map(text => ({ kind: 'line', text, color }))
+}
+
+// A part's header and rows; nothing when it has no row.
+function part(name: string, rows: readonly Row[]): Row[] {
+  return rows.length === 0 ? [] : [{ kind: 'header', name }, ...rows]
 }
 
 function inactive(text: string): Row {
