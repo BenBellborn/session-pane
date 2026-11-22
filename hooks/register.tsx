@@ -166,7 +166,8 @@ function taskLinePattern(options: PluginOptions): RegExp | string {
 }
 
 function openPane($: EngineInterface) {
-  return $.ui.open({ id: PANE, title: 'Session' })
+  // Transparent: the terminal's own background shows under the body, not the surface's pane color.
+  return $.ui.open({ id: PANE, title: 'Session', backgroundColor: 'transparent' })
 }
 
 async function sync($: EngineInterface, projectRoot: string, filterFolder: string, settings: Settings) {
