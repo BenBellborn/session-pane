@@ -326,6 +326,7 @@ function backgroundTasksWatch(on: Parameters<Register>[0]) {
   // A local task's end notice comes in as a prompt; a relayed one as a delivery.
   on('prompt.submit', async ($, e, next) => {
     if (e.origin?.kind === 'task-notification') await taskEndsDrop($, e.text)
+    await grantedDrop($, e.text)
 
     return next(e)
   })
@@ -377,6 +378,20 @@ type PermissionCall = { agentId?: string; tool: string; input: unknown }
 async function permissionDrop($: EngineInterface, call: PermissionCall) {
   const key = permissionKey(call)
   await update($, permissions, now => Object.fromEntries(Object.entries(now).filter(([k]) => k !== key)))
+}
+
+// A /permissions grant prompt: 'Permission granted for this exact command only, as one whole string: "<JSON-escaped command>"'.
+const GRANT = /Permission granted for this exact command only, as one whole string: ("(?:[^"\\]|\\.)*")/
+
+// rule: a grant drops the denied command's line at once; the model may never retry it.
+async function grantedDrop($: EngineInterface, text: string) {
+  const quoted = GRANT.exec(text)?.[1]
+  if (!quoted) return
+  const command = JSON.parse(quoted) as string
+  await update($, permissions, now => Object.fromEntries(Object.entries(now).filter(([key]) => {
+    const [, , input] = JSON.parse(key) as [string, string, { command?: unknown } | null]
+    return input?.command !== command
+  })))
 }
 
 function permissionKey(call: PermissionCall) {

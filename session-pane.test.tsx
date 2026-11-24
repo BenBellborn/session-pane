@@ -430,6 +430,19 @@ test('a new prompt keeps every denied call', HEADING, async ($, on) => {
   expect((await paneParts($, on, denyAndPrompt)).get('Permissions')).toEqual(['Bash: git push origin main'])
 })
 
+test('a /permissions grant of a denied command drops its line before any retry; the others stay', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+  const deny = judged($, on, [[PUSH, 'deny'], [WRITE, 'deny']])
+  on('prompt.submit', (_$, e) => e as never)
+  const grant = 'Permission granted for this exact command only, as one whole string: "git push\\n  origin main". This does not approve'
+  const denyAndGrant = async () => {
+    await deny()
+    await $.prompt.submit({ text: `${grant} any other command.\n1a` } as never)
+  }
+
+  expect((await paneParts($, on, denyAndGrant)).get('Permissions')).toEqual(['Write: C:/proj/a.py'])
+})
+
 // Each highlighted Text after the presses: drawn on the dark theme's selection shade, never inverse.
 async function highlighted($: Engine, on: On, presses: string[], before?: () => Promise<unknown>) {
   const texts = await paneTextElements($, on, before, presses)
