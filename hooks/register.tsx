@@ -29,8 +29,8 @@ const TASK_END = /<status>(completed|failed|killed|stopped)<\/status>/
 const TASK_FORMATS = {
   // "- [ ] Write the docs"; a checked "- [x]" line is done.
   checkbox: /^\s*[-*+] \[ \] +(?<title>.*?)\s*$/,
-  // "## Task 132: 🔴 [Bug] Title". The colon and bold marks are optional, so a heading a bad edit left half-formatted still shows.
-  heading: /^## Task:? *(?<id>[0-9][0-9.]*[a-z]?)\**:? *(?<title>.*?)\s*$/,
+  // "## Task 132: 🔴 [Bug] Title", "## Task US-1283a: ..." (ticket key id). The colon and bold marks are optional, so a heading a bad edit left half-formatted still shows.
+  heading: /^## Task:? *(?<id>(?:[A-Z][A-Z0-9]*-|#)?[0-9][0-9.]*[a-z]?)\**:? *(?<title>.*?)\s*$/,
 }
 // rule: pane colors are theme keys only. Plain lines take no color: chat text's terminal color, not white 'text'.
 // Lower-case extension to its color; any other file shows as plain text.

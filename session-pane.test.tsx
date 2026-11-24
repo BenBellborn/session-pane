@@ -141,6 +141,15 @@ test('with no filter, every task heading shows in file order', HEADING, async ($
   ])
 })
 
+test('a ticket key heading shows its key as id, subtask letter included', HEADING, async ($, on) => {
+  mockEngine(on, { todo: ['# TODO', '', '## Task US-1283:  🔴 [Bug] Keyed task', '', '## Task US-1283a: 🟡 Keyed subtask'].join('\r\n') })
+
+  expect(await paneLines($, on)).toEqual([
+    'US-1283: 🔴 [Bug] Keyed task',
+    'US-1283a: 🟡 Keyed subtask',
+  ])
+})
+
 test('a filter shows only its tasks, in its order; a task gone from TODO.md drops out', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, state: { mode: 'fix', ids: ['46', '99', '18'] } })
 
