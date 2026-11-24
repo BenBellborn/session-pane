@@ -199,7 +199,9 @@ function statusParse(stdout: string) {
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i]!
     if (field.length < 4) continue
-    changed.push({ path: field.slice(3), isUntracked: field.startsWith('??') })
+    const path = field.slice(3)
+    // rule: a `.stackdump` is a crash dump Git Bash leaves behind, never a change of the session.
+    if (!path.endsWith('.stackdump')) changed.push({ path, isUntracked: field.startsWith('??') })
     // A rename or copy carries its old path as the next field.
     if (field[0] === 'R' || field[0] === 'C') i++
   }

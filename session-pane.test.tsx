@@ -240,6 +240,12 @@ test('changed files show by name on one line; a rename shows its new name', HEAD
   expect((await paneParts($, on)).get('Changed')!.join('')).toBe('a.py, new.md, b2.py, out')
 })
 
+test('a .stackdump file is not listed as changed', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: [' M src/a.py', '?? bash.exe.stackdump', '?? tools/sh.stackdump', ''].join('\0') })
+
+  expect((await paneParts($, on)).get('Changed')!.join('')).toBe('a.py')
+})
+
 test('each changed file shows in its extension color and the commas in the theme gray', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, git: [' M src/A.CS', ' M x.py', '?? docs/new.md', '?? build/out', ''].join('\0') })
 

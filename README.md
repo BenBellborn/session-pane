@@ -5,7 +5,7 @@ A Claude Code pane beside the chat that shows what the session does now. It refr
 | Part | Shows |
 |---|---|
 | Permissions | Calls auto mode denied. A line drops out when a later call of the same tool and input is allowed. |
-| Changed | Files `git status` lists as changed or untracked, colored by file type. Press a name to see its diff against `HEAD`; press again to close it. |
+| Changed | Files `git status` lists as changed or untracked, colored by file type. `*.stackdump` files are left out. Press a name to see its diff against `HEAD`; press again to close it. |
 | Agents | Running agents as `<model>:<agent type> - <name>`, sub agents indented under their parent, then background shell, monitor and workflow tasks. |
 | Tasks | Open tasks of the first task file found in the project. |
 
