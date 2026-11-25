@@ -2,6 +2,8 @@
 
 A Claude Code pane beside the chat that shows what the session does now. It refreshes every 2 seconds.
 
+<img src="docs/demo.png" width="560" alt="session-pane with denied calls, changed files, a diff, agents and tasks">
+
 | Part | Shows |
 |---|---|
 | Permissions | Calls auto mode denied. A line drops out when a later call of the same tool and input is allowed, or when `/permissions` grants its command. |
