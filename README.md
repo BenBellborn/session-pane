@@ -6,8 +6,8 @@ A Claude Code pane beside the chat that shows what the session does now. It refr
 |---|---|
 | Permissions | Calls auto mode denied. A line drops out when a later call of the same tool and input is allowed, or when `/permissions` grants its command. |
 | Changed | Files `git status` lists as changed or untracked, colored by file type. `*.stackdump` files are left out. Press a name to see its diff against `HEAD`; press again to close it. |
-| Agents | Running agents as `<model>:<agent type> - <name>`, sub agents indented under their parent, then background shell, monitor and workflow tasks. |
-| Tasks | Open tasks of the first task file found in the project. |
+| Agents | Running agents as `<model>:<effort>:<agent type> - <name>`, model and effort colored by tier: Opus and `high`/`xhigh` yellow, Fable and `max` orange, others plain (effort left out when the agent takes the session's), sub agents indented under their parent, then background tasks as `<task> - <description>`, the task kind in its own color: `shell` pink, `monitor` teal, `workflow` blue. Each line stays one line, cut at the pane edge. |
+| Tasks | Open tasks of the first task file found in the project, each led by `❯ ` and its id in the theme's suggestion color. |
 
 A part with nothing to show is hidden. Press a file name or a line to highlight it and run its press action (see [Press actions](#press-actions)); press it again to clear it. Open the pane with `/session-pane`. It also opens when an interactive session starts.
 

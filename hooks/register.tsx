@@ -1,14 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, Register, RenderChildren, ThemeKey } from 'claude-code'
 
-import type { BackgroundTasks, ChangedFile, OpenPermissions, Output, SessionView, TaskLine } from '../types'
+import type { AgentLine, BackgroundTasks, ChangedFile, OpenPermissions, Output, SessionView, TaskKind, TaskLine } from '../types'
 import { configEnsure, itemPress } from './press'
 import type { PressedItem } from './press'
 import { attempt, configDirPath } from './shared'
 
 const PANE = 'session-pane'
 // Change the tag when SessionView's fields change: it declines what an earlier version stored.
-const view = atom({ plugin: 'session-pane', key: 'view' } as const, { projectRoot: '', changed: [], agents: [], lines: [] }, { shape: 'view-2' })
+const view = atom({ plugin: 'session-pane', key: 'view' } as const, { projectRoot: '', changed: [], agents: [], lines: [] }, { shape: 'view-4' })
 // The section a press opened; null: none. It belongs to the selected item and closes when the selection moves.
 // rule: the state scan reads atoms only as consts of the reading file; press.ts and register.tsx each declare these two.
 const output = atom({ plugin: 'session-pane', key: 'output' } as const, null as Output | null, { shape: 'output-1' })
@@ -16,7 +16,7 @@ const output = atom({ plugin: 'session-pane', key: 'output' } as const, null as 
 const selection = atom({ plugin: 'session-pane', key: 'selection' } as const, null as string | null, { shape: 'selection-1' })
 // Background tasks started in this session (shell, monitor, workflow), by task id. The engine lists none to a mod, so the
 // mod notes each one its tool call starts and drops it at its end notice or its TaskStop.
-const tasks = atom({ plugin: 'session-pane', key: 'tasks' } as const, {} as BackgroundTasks, { shape: 'tasks-1' })
+const tasks = atom({ plugin: 'session-pane', key: 'tasks' } as const, {} as BackgroundTasks, { shape: 'tasks-2' })
 // Calls auto mode denied, kept until /permissions retries them. A retry is a new call with a new tool_use_id,
 // so a denial is matched on agent, tool and input.
 const permissions = atom({ plugin: 'session-pane', key: 'permissions' } as const, {} as OpenPermissions, { shape: 'permissions-1' })
@@ -32,6 +32,8 @@ const TASK_FORMATS = {
   // "## Task 132: 🔴 [Bug] Title", "## Task US-1283a: ..." (ticket key id). The colon and bold marks are optional, so a heading a bad edit left half-formatted still shows.
   heading: /^## Task:? *(?<id>(?:[A-Z][A-Z0-9]*-|#)?[0-9][0-9.]*[a-z]?)\**:? *(?<title>.*?)\s*$/,
 }
+// Leads each task line, so tasks stand apart from their wrapped or long titles.
+const TASK_MARK = '❯ '
 // rule: pane colors are theme keys only. Plain lines take no color: chat text's terminal color, not white 'text'.
 // Lower-case extension to its color; any other file shows as plain text.
 const EXTENSION_COLORS: Record<string, ThemeKey> = {
@@ -44,6 +46,11 @@ const EXTENSION_COLORS: Record<string, ThemeKey> = {
   html: 'claude', css: 'claude', scss: 'claude', cshtml: 'claude', razor: 'claude',
   sql: 'success',
 }
+// An agent line's model family and effort colors, by tier: Opus and high yellow, Fable and max orange; any other plain.
+const MODEL_COLORS: Record<string, ThemeKey> = { Opus: 'warning', Fable: 'claude' }
+const EFFORT_COLORS: Record<string, ThemeKey> = { high: 'warning', xhigh: 'warning', max: 'claude' }
+// rule: each background task kind has its own color, none an agent line's model or effort takes.
+const TASK_COLORS: Record<TaskKind, ThemeKey> = { shell: 'bashBorder', monitor: 'planMode', workflow: 'ide' }
 
 // The plugin's options as the pane uses them. `taskLine` is the note to show instead when the custom pattern is bad.
 type Settings = {
@@ -65,9 +72,14 @@ type FileButton = { path: string; name: string; item: PressedItem; isSelected: b
 type Row =
   | { kind: 'header'; name: string }
   // A line with an item is pressable: a press selects it and runs its action, a second press clears it.
-  | { kind: 'line'; text: string; color?: ThemeKey; item?: PressedItem; isSelected?: boolean }
+  // `head`: spans in their own colors before `text` (an agent's model and effort).
+  | { kind: 'line'; head?: Span[]; text: string; color?: ThemeKey; item?: PressedItem; isSelected?: boolean }
+  // A task line: "❯ ", its padded id in its own color when it has one, then the rest of its text.
+  | { kind: 'task'; id?: string; text: string; item: PressedItem; isSelected: boolean }
   | { kind: 'changed'; files: FileButton[] }
   | { kind: 'output'; output: Output }
+
+type Span = { text: string; color?: ThemeKey }
 
 export const register: Register = (on, options) => {
   const settings = settingsRead(options)
@@ -123,8 +135,23 @@ export const register: Register = (on, options) => {
       ])
     // Only a selected line is padded to the pane's width: the host inverts a Button's label under the pointer, so an unpadded label
     // keeps that inversion on its text.
-    const pressableLine = (row: Extract<Row, { kind: 'line' }>, item: PressedItem) =>
-      pressable(item, row.isSelected, style => <Text color={row.color} {...style} wrap="truncate-end">{row.isSelected ? row.text.padEnd(e.props.bodyColumns) : row.text}</Text>)
+    const pressableLine = (row: Extract<Row, { kind: 'line' }>, item: PressedItem) => {
+      const head = row.head ?? []
+      const rest = row.isSelected ? row.text.padEnd(e.props.bodyColumns - head.reduce((n, s) => n + s.text.length, 0)) : row.text
+
+      return pressable(item, row.isSelected, style => (
+        <Text {...style} wrap="truncate-end">
+          {head.map(s => <Text color={s.color}>{s.text}</Text>)}
+          <Text color={row.color}>{rest}</Text>
+        </Text>
+      ))
+    }
+    const taskLine = (row: Extract<Row, { kind: 'task' }>) => {
+      const lead = `${TASK_MARK}${row.id ?? ''}`
+      const rest = row.isSelected ? row.text.padEnd(e.props.bodyColumns - lead.length) : row.text
+
+      return pressable(row.item, row.isSelected, style => <Text {...style} wrap="truncate-end">{TASK_MARK}{row.id && <Text color="suggestion">{row.id}</Text>}{rest}</Text>)
+    }
     // A part's header fills the pane's width: "── Agents ───────".
     const draw = (row: Row) => {
       switch (row.kind) {
@@ -132,6 +159,8 @@ export const register: Register = (on, options) => {
           return <Text color="inactive">{`── ${row.name} `.padEnd(Math.max(row.name.length + 4, e.props.bodyColumns), '─')}</Text>
         case 'line':
           return row.item ? pressableLine(row, row.item) : <Text color={row.color} wrap="truncate-end">{row.text}</Text>
+        case 'task':
+          return taskLine(row)
         case 'changed':
           return <Box flexDirection="row" flexWrap="wrap">{fileButtons(row.files)}</Box>
         case 'output':
@@ -209,22 +238,25 @@ function statusParse(stdout: string) {
   return changed
 }
 
-// One line per agent still working, "<model family>:<agent type> - <name or task>", each sub agent indented under the agent
-// that started it; then one line per background task.
-async function runningAgents($: EngineInterface) {
+// One line per agent still working, "<model family>:<effort>:<agent type> - <name or task>", each sub agent indented under
+// the agent that started it; then one line per background task.
+async function runningAgents($: EngineInterface): Promise<AgentLine[]> {
   const agents = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running' || a.status === 'pending' || a.status === 'waiting')
   const ids = new Set(agents.map(a => a.id))
-  const lines: string[] = []
+  const lines: AgentLine[] = []
   const add = (shown: typeof agents, depth: number) => {
     for (const a of shown) {
-      lines.push(`${depth === 0 ? '' : `${'  '.repeat(depth - 1)}└ `}${modelFamily(a.model)}:${a.type} - ${a.name ?? a.description}`)
+      // The effort its last request carried, else the one set for it; none: the session's, left out.
+      const effort = a.lastRequest?.effort ?? a.effort
+      const lead = depth === 0 ? '' : `${'  '.repeat(depth - 1)}└ `
+      lines.push({ lead, family: modelFamily(a.model), effort: effort === undefined ? undefined : String(effort), rest: `${a.type} - ${oneLine(a.name ?? a.description)}` })
       add(agents.filter(b => b.parentId !== undefined && b.parentId === a.id), depth + 1)
     }
   }
   // An agent whose parent ended or is not listed shows at the top level.
   add(agents.filter(a => !a.parentId || !ids.has(a.parentId)), 0)
 
-  return [...lines, ...Object.values(await read($, tasks))]
+  return [...lines, ...Object.values(await read($, tasks)).map(t => ({ lead: '', task: t.kind, rest: t.title }))]
 }
 
 // 'claude-opus-5-5' gives 'Opus'; an id of another form shows as is.
@@ -289,28 +321,28 @@ function arrange(byKey: Map<string, FoundTask>, filter: { mode: string; ids: str
 function backgroundTasksWatch(on: Parameters<Register>[0]) {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
-    if (ran.result && !ran.isError && ran.result.backgroundTaskId) await taskAdd($, ran.result.backgroundTaskId, `shell - ${e.description ?? e.command}`)
+    if (ran.result && !ran.isError && ran.result.backgroundTaskId) await taskAdd($, ran.result.backgroundTaskId, 'shell', e.description ?? e.command)
 
     return ran
   })
 
   on('tool.call', { tool: 'PowerShell' }, async ($, e, next) => {
     const ran = await next(e)
-    if (ran.result && !ran.isError && ran.result.backgroundTaskId) await taskAdd($, ran.result.backgroundTaskId, `shell - ${e.description ?? e.command}`)
+    if (ran.result && !ran.isError && ran.result.backgroundTaskId) await taskAdd($, ran.result.backgroundTaskId, 'shell', e.description ?? e.command)
 
     return ran
   })
 
   on('tool.call', { tool: 'Monitor' }, async ($, e, next) => {
     const ran = await next(e)
-    if (ran.result && !ran.isError) await taskAdd($, ran.result.taskId, `monitor - ${e.description}`)
+    if (ran.result && !ran.isError) await taskAdd($, ran.result.taskId, 'monitor', e.description)
 
     return ran
   })
 
   on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
     const ran = await next(e)
-    if (ran.result && !ran.isError) await taskAdd($, ran.result.taskId, `workflow - ${ran.result.workflowName ?? e.name ?? 'script'}`)
+    if (ran.result && !ran.isError) await taskAdd($, ran.result.taskId, 'workflow', ran.result.workflowName ?? e.name ?? 'script')
 
     return ran
   })
@@ -338,8 +370,13 @@ function backgroundTasksWatch(on: Parameters<Register>[0]) {
   })
 }
 
-async function taskAdd($: EngineInterface, id: string, label: string) {
-  await update($, tasks, now => ({ ...now, [id]: label }))
+async function taskAdd($: EngineInterface, id: string, kind: TaskKind, description: string) {
+  await update($, tasks, now => ({ ...now, [id]: { kind, title: oneLine(description) } }))
+}
+
+// rule: a tool argument (agent task, command, description) can hold line breaks; each pane line stays one line.
+function oneLine(text: string) {
+  return text.replace(/\s+/g, ' ').trim()
 }
 
 // Drops each task the notice text says has ended.
@@ -403,7 +440,7 @@ function inputSummary(input: unknown) {
   const fields = (input ?? {}) as Record<string, unknown>
   const named = ['command', 'file_path', 'url', 'pattern', 'path'].map(k => fields[k]).find(v => typeof v === 'string')
 
-  return String(named ?? JSON.stringify(input)).replace(/\s+/g, ' ')
+  return oneLine(String(named ?? JSON.stringify(input)))
 }
 
 // The selection shade: 25 % off the theme's background toward the other end, never inverse.
@@ -422,9 +459,9 @@ async function themeName($: EngineInterface) {
 function paneRows(shown: SessionView, asks: string[], opened: Output | null, selected: string | null): Row[] {
   const pick = { opened, selected }
   const rows = [
-    ...part('Permissions', 'Permissions', textLines(shown, 'permission', asks, pick), opened),
+    ...part('Permissions', 'Permissions', textLines(shown, 'permission', asks.map(text => ({ text, color: 'permission' as const })), pick), opened),
     ...part('Changed', 'Changed', changedRows(shown, selected), opened),
-    ...part('Agents', 'Agents', textLines(shown, 'agent', shown.agents, pick), opened),
+    ...part('Agents', 'Agents', textLines(shown, 'agent', shown.agents.map(agentSpans), pick), opened),
     ...part('Tasks', shown.mode ? `Tasks (/${shown.mode})` : 'Tasks', taskRows(shown, pick), opened),
   ]
 
@@ -455,15 +492,26 @@ function changedRows(shown: SessionView, selected: string | null): Row[] {
   return [{ kind: 'changed', files }]
 }
 
-// Permission and agent lines: their placeholders are the line and the project folder.
-function textLines(shown: SessionView, kind: 'permission' | 'agent', lines: string[], pick: Chosen): Row[] {
+// An agent line as "<lead><model>:<effort>:" spans, model and effort in their tier colors, then the rest plain; a task line as
+// "<task> - ", the task kind in its color.
+function agentSpans(a: AgentLine): { head: Span[]; text: string } {
+  const head: Span[] = [{ text: a.lead }]
+  if (a.task) head.push({ text: a.task, color: TASK_COLORS[a.task] }, { text: ' - ' })
+  if (a.family) head.push({ text: a.family, color: MODEL_COLORS[a.family] }, { text: ':' })
+  if (a.effort) head.push({ text: a.effort, color: EFFORT_COLORS[a.effort] }, { text: ':' })
+
+  return { head, text: a.rest }
+}
+
+// Permission and agent lines: their placeholders are the whole line and the project folder.
+function textLines(shown: SessionView, kind: 'permission' | 'agent', lines: { head?: Span[]; text: string; color?: ThemeKey }[], pick: Chosen): Row[] {
   const partName = kind === 'permission' ? 'Permissions' : 'Agents'
-  const color: ThemeKey | undefined = kind === 'permission' ? 'permission' : undefined
 
-  return lines.map(text => {
-    const item: PressedItem = { kind, key: `${partName}:${text}`, label: text, values: { text, root: shown.projectRoot }, cwd: shown.projectRoot }
+  return lines.map(({ head, text, color }) => {
+    const line = (head ?? []).map(s => s.text).join('') + text
+    const item: PressedItem = { kind, key: `${partName}:${line}`, label: line, values: { text: line, root: shown.projectRoot }, cwd: shown.projectRoot }
 
-    return { kind: 'line', text, color, item, isSelected: item.key === pick.selected }
+    return { kind: 'line', head, text, color, item, isSelected: item.key === pick.selected }
   })
 }
 
@@ -475,7 +523,9 @@ function taskRows(shown: SessionView, pick: Chosen): Row[] {
     const values = { text: task.text.trim(), id: task.id ?? '', line: String(task.line), path: taskFile, file: `${shown.projectRoot}/${taskFile}`, root: shown.projectRoot }
     const item: PressedItem = { kind: 'task', key: `Tasks:${task.text}`, label: task.id ?? task.text.trim(), values, cwd: shown.projectRoot }
 
-    return { kind: 'line', text: task.text, item, isSelected: item.key === pick.selected }
+    const id = task.id?.padStart(5)
+
+    return { kind: 'task', id, text: id ? task.text.slice(id.length) : task.text, item, isSelected: item.key === pick.selected }
   })
 }
 

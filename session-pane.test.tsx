@@ -17,7 +17,17 @@ const TODO = [
   '## Task 46: 🟡 [Refactor] Domain-first names',
 ].join('\r\n')
 
-type Agent = { id?: string; parentId?: string; status: string; type: string; model?: string; name?: string; description: string }
+type Agent = {
+  id?: string
+  parentId?: string
+  status: string
+  type: string
+  model?: string
+  effort?: string
+  lastRequest?: { effort?: string }
+  name?: string
+  description: string
+}
 
 // The task format of the TODO text above; a test without it gets the manifest's defaults.
 const HEADING = { options: { taskFormat: 'heading' } }
@@ -134,10 +144,10 @@ test('with no filter, every task heading shows in file order', HEADING, async ($
   mockEngine(on, { todo: TODO })
 
   expect(await paneLines($, on)).toEqual([
-    '    3: 🔴 [Ben] [Planned] Give XP for puzzles',
-    '   18: 🔴 [Bug] [Planned] Make every legend reach the AI',
-    '  20a: 🟡 [Bug] Half-formatted heading',
-    '   46: 🟡 [Refactor] Domain-first names',
+    '❯     3: 🔴 [Ben] [Planned] Give XP for puzzles',
+    '❯    18: 🔴 [Bug] [Planned] Make every legend reach the AI',
+    '❯   20a: 🟡 [Bug] Half-formatted heading',
+    '❯    46: 🟡 [Refactor] Domain-first names',
   ])
 })
 
@@ -145,17 +155,24 @@ test('a ticket key heading shows its key as id, subtask letter included', HEADIN
   mockEngine(on, { todo: ['# TODO', '', '## Task US-1283:  🔴 [Bug] Keyed task', '', '## Task US-1283a: 🟡 Keyed subtask'].join('\r\n') })
 
   expect(await paneLines($, on)).toEqual([
-    'US-1283: 🔴 [Bug] Keyed task',
-    'US-1283a: 🟡 Keyed subtask',
+    '❯ US-1283: 🔴 [Bug] Keyed task',
+    '❯ US-1283a: 🟡 Keyed subtask',
   ])
+})
+
+test('a task id shows in the suggestion color', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  const id = (await paneTextElements($, on)).find(t => t.text === '    3')
+  expect(id?.props.color).toBe('suggestion')
 })
 
 test('a filter shows only its tasks, in its order; a task gone from TODO.md drops out', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, state: { mode: 'fix', ids: ['46', '99', '18'] } })
 
   expect(await paneLines($, on)).toEqual([
-    '   46: 🟡 [Refactor] Domain-first names',
-    '   18: 🔴 [Bug] [Planned] Make every legend reach the AI',
+    '❯    46: 🟡 [Refactor] Domain-first names',
+    '❯    18: 🔴 [Bug] [Planned] Make every legend reach the AI',
   ])
 })
 
@@ -188,19 +205,19 @@ const CHECKBOXES = ['# TODO', '- [ ] Write the docs', '- [x] Pick a name', '  * 
 test('by default, each open checkbox line of TODO.md shows; checked ones do not', async ($, on) => {
   mockEngine(on, { rootTodo: CHECKBOXES, todo: TODO })
 
-  expect(await paneLines($, on)).toEqual(['Write the docs', 'Nested item'])
+  expect(await paneLines($, on)).toEqual(['❯ Write the docs', '❯ Nested item'])
 })
 
 test('the first task file found fills the Tasks part', { options: { taskFiles: 'tasks.md, docs/TODO.md', taskFormat: 'heading' } }, async ($, on) => {
   mockEngine(on, { todo: TODO })
 
-  expect((await paneLines($, on))?.[0]).toBe('    3: 🔴 [Ben] [Planned] Give XP for puzzles')
+  expect((await paneLines($, on))?.[0]).toBe('❯     3: 🔴 [Ben] [Planned] Give XP for puzzles')
 })
 
 test('a custom pattern takes its id and title groups', { options: { taskFormat: 'custom', taskPattern: '^TODO\\((?<id>\\w+)\\): (?<title>.*)$' } }, async ($, on) => {
   mockEngine(on, { rootTodo: ['TODO(a1): Ship it', 'other', 'TODO(b2): Test it'].join('\n') })
 
-  expect(await paneLines($, on)).toEqual(['   a1: Ship it', '   b2: Test it'])
+  expect(await paneLines($, on)).toEqual(['❯    a1: Ship it', '❯    b2: Test it'])
 })
 
 test('a bad custom pattern shows its error in the Tasks part', { options: { taskFormat: 'custom', taskPattern: '(' } }, async ($, on) => {
@@ -225,7 +242,7 @@ test('a hidden part shows no header', { options: { showChanged: false, showAgent
 test('the filter file sits under CLAUDE_CONFIG_DIR when it is set', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, env: { CLAUDE_CONFIG_DIR: 'D:/cfg', HOME: '/home/u' }, state: { mode: 'fix', ids: ['18'] } })
 
-  expect(await paneLines($, on)).toEqual(['   18: 🔴 [Bug] [Planned] Make every legend reach the AI'])
+  expect(await paneLines($, on)).toEqual(['❯    18: 🔴 [Bug] [Planned] Make every legend reach the AI'])
 })
 
 test('with no changed file and no running agent, those parts are hidden', HEADING, async ($, on) => {
@@ -324,6 +341,50 @@ test('a sub agent shows indented under the agent that started it', HEADING, asyn
   expect((await paneParts($, on)).get('Agents')).toEqual(['Opus:Plan - lead', '└ Haiku:Explore - find files', 'Sonnet:Explore - other'])
 })
 
+test('an agent line shows the effort its last request carried, else the one set for it', HEADING, async ($, on) => {
+  mockEngine(on, {
+    todo: TODO,
+    agents: [
+      { status: 'running', type: 'fix-worker', model: 'claude-opus-5-5', effort: 'high', lastRequest: { effort: 'medium' }, description: 'T22' },
+      { status: 'running', type: 'Explore', model: 'claude-sonnet-5-5', effort: 'low', description: 'find it' },
+    ],
+  })
+
+  expect((await paneParts($, on)).get('Agents')).toEqual(['Opus:medium:fix-worker - T22', 'Sonnet:low:Explore - find it'])
+})
+
+test('an agent line colors its model and effort by tier: Opus and high yellow, Fable and max orange; the rest plain', HEADING, async ($, on) => {
+  mockEngine(on, {
+    todo: TODO,
+    agents: [
+      { status: 'running', type: 'Plan', model: 'claude-opus-5-5', effort: 'medium', description: 'a' },
+      { status: 'running', type: 'Plan', model: 'claude-sonnet-5-5', effort: 'high', description: 'b' },
+      { status: 'running', type: 'Plan', model: 'claude-haiku-5-5', effort: 'low', description: 'c' },
+      { status: 'running', type: 'Plan', model: 'claude-fable-5-2', effort: 'max', description: 'd' },
+      { status: 'running', type: 'Plan', model: 'gpt-x', effort: 'xhigh', description: 'e' },
+    ],
+  })
+
+  const shown = (await paneTextElements($, on)).map(t => [t.text, t.props.color])
+  const spans = /^(Opus|Sonnet|Haiku|Fable|gpt-x|medium|high|low|max|xhigh|Plan - [a-e])$/
+  expect(shown.filter(([text]) => spans.test(String(text)))).toEqual([
+    ['Opus', 'warning'], ['medium', undefined], ['Plan - a', undefined],
+    ['Sonnet', undefined], ['high', 'warning'], ['Plan - b', undefined],
+    ['Haiku', undefined], ['low', undefined], ['Plan - c', undefined],
+    ['Fable', 'claude'], ['max', 'claude'], ['Plan - d', undefined],
+    ['gpt-x', undefined], ['xhigh', 'warning'], ['Plan - e', undefined],
+  ])
+})
+
+test('an agent whose task argument holds line breaks shows on one line', HEADING, async ($, on) => {
+  mockEngine(on, {
+    todo: TODO,
+    agents: [{ status: 'running', type: 'Explore', model: 'claude-opus-5-5', description: 'find it\n  in the repo\r\n' }],
+  })
+
+  expect((await paneParts($, on)).get('Agents')).toEqual(['Opus:Explore - find it in the repo'])
+})
+
 // A Monitor task and a background Bash task, started once the session started.
 function backgroundStart($: Engine, on: On) {
   on('tool.call', { tool: 'Monitor' }, () => ({ result: { taskId: 'm1', timeoutMs: 0 } }))
@@ -339,6 +400,29 @@ test('a background task shows under the agents', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO })
 
   expect((await paneParts($, on, backgroundStart($, on))).get('Agents')).toEqual(['monitor - Watch the build', 'shell - Build the app'])
+})
+
+test('a background task kind shows in its own color', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+  on('tool.call', { tool: 'Workflow' }, () => ({ result: { taskId: 'w1', workflowName: 'review' } }))
+  const start = backgroundStart($, on)
+  const startAll = async () => {
+    await start()
+    await $.tool.call({ tool: 'Workflow', script: 'x' } as never)
+  }
+
+  const shown = (await paneTextElements($, on, startAll)).map(t => [t.text, t.props.color])
+  expect(shown.filter(([text]) => /^(shell|monitor|workflow)$/.test(String(text)))).toEqual([
+    ['monitor', 'planMode'], ['shell', 'bashBorder'], ['workflow', 'ide'],
+  ])
+})
+
+test('a background command whose argument holds line breaks shows on one line', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' } }))
+  const start = () => $.tool.call({ tool: 'Bash', command: 'cd app &&\n  make\n', run_in_background: true } as never)
+
+  expect((await paneParts($, on, start)).get('Agents')).toEqual(['shell - cd app && make'])
 })
 
 test('a shell task drops out when its end notice comes in as a prompt', HEADING, async ($, on) => {
@@ -475,7 +559,7 @@ test('a press on a task line moves the highlight there from the line selected be
   mockEngine(on, { todo: TODO, agents: [SCOUT] })
 
   expect(await highlighted($, on, ['Agents:Opus:Explore - scout', 'Tasks:   46: 🟡 [Refactor] Domain-first names'])).toEqual([
-    '   46: 🟡 [Refactor] Domain-first names',
+    '❯    46: 🟡 [Refactor] Domain-first names',
   ])
 })
 
@@ -622,7 +706,7 @@ test('a config.json that is no JSON shows a config error section and keeps the h
   const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
   await ui.unmount()
   expect(texts).toContain('── Config error ')
-  expect(texts).toContain('   46: 🟡 [Refactor] Domain-first names')
+  expect(texts).toContain('❯    46: 🟡 [Refactor] Domain-first names')
 })
 
 test('a diff action on a task shows a config error', HEADING, async ($, on) => {
