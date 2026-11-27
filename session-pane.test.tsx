@@ -48,10 +48,11 @@ type Files = {
   ran?: string[]
   config?: object | string
   written?: Record<string, string>
+  projectDir?: string
 }
 
 // The engine's files: docs/TODO.md (`todo`) and TODO.md (`rootTodo`) under the project folder C:/proj, and the filter file when
-// `state` is given; the env (USERPROFILE C:/Users/u unless `env` is given), `git status -z` output, `git diff` output and the agent
+// `state` is given; the project folder CLAUDE_PROJECT_DIR (C:/proj unless `projectDir` is given); the env (USERPROFILE C:/Users/u unless `env` is given), `git status -z` output, `git diff` output and the agent
 // list, and config.json (`config`; a string as is). Each git command line run is noted in `ran`, each file written in `written`.
 function mockEngine(on: On, files: Files) {
   const env = files.env ?? { USERPROFILE: 'C:/Users/u' }
@@ -80,7 +81,7 @@ function mockEngine(on: On, files: Files) {
   on('agent.list', () => ({ value: files.agents ?? [] }))
   on('command.register', () => ({ value: undefined }))
   on('session.id', () => ({ value: 's1' }))
-  on('process.hookEnv', () => ({ value: { CLAUDE_PROJECT_DIR: 'C:/proj' } }))
+  on('process.hookEnv', () => ({ value: { CLAUDE_PROJECT_DIR: files.projectDir ?? 'C:/proj' } }))
   on('fs.read', (_$, e) => {
     const text = reads[e.path.replace(/\\/g, '/')]
     if (text === undefined) throw new Error('ENOENT')
@@ -207,6 +208,30 @@ test('a project with no task file hides the Tasks part', HEADING, async ($, on) 
 test('with nothing to show in any part, the pane says so', async ($, on) => {
   mockEngine(on, {})
 
+  expect(await paneTexts($, on)).toEqual(['C:\\proj', 'Nothing to show.'])
+})
+
+test('the project folder shows first, in Windows form', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  expect((await paneTexts($, on))[0]).toBe('C:\\proj')
+})
+
+test('a project folder with no drive letter shows as is', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, projectDir: '/home/u/proj' })
+
+  expect((await paneTexts($, on))[0]).toBe('/home/u/proj')
+})
+
+test('a project folder too long for the pane keeps its end', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  expect((await paneTextElements($, on, undefined, [], 'Text', 5))[0]!.text).toBe('…proj')
+})
+
+test('with showPath off, no project folder row shows', { options: { showPath: false } }, async ($, on) => {
+  mockEngine(on, {})
+
   expect(await paneTexts($, on)).toEqual(['Nothing to show.'])
 })
 
@@ -276,7 +301,7 @@ test('a .stackdump file is not listed as changed', HEADING, async ($, on) => {
 test('each changed file shows in its extension color and the commas in the theme gray', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, git: [' M src/A.CS', ' M x.py', '?? docs/new.md', '?? build/out', ''].join('\0') })
 
-  const colors = (await paneTextElements($, on)).slice(1, 9).map(t => [t.text, t.props.color])
+  const colors = (await paneTextElements($, on)).slice(2, 10).map(t => [t.text, t.props.color])
   expect(colors).toEqual([
     ['A.CS', 'ide'],
     [', ', 'inactive'],
@@ -587,7 +612,7 @@ test('each call auto mode denied shows as one line under a Permissions header at
   mockEngine(on, { todo: TODO })
 
   const texts = await paneTexts($, on, judged($, on, [[PUSH, 'deny'], [WRITE, 'deny']]))
-  expect(texts.slice(0, 4)).toEqual([header('Permissions'), 'Bash: git push origin main', 'Write: C:/proj/a.py', header('Tasks')])
+  expect(texts.slice(0, 5)).toEqual(['C:\\proj', header('Permissions'), 'Bash: git push origin main', 'Write: C:/proj/a.py', header('Tasks')])
 })
 
 test('with no denied call, no Permissions part shows', HEADING, async ($, on) => {
@@ -710,7 +735,7 @@ test('a session start writes config.json with the default actions when it is mis
 
   await paneMount($, on).then(ui => ui.unmount())
   expect(JSON.parse(written['C:/Users/u/.claude/session-pane/config.json']!)).toEqual({
-    onPress: { changedFile: 'diff', task: 'select', permission: 'select', agent: 'select' },
+    onPress: { changedFile: 'diff', task: 'select', permission: 'select', agent: 'select', path: { run: ['explorer.exe', '{path}'] } },
   })
 })
 
@@ -736,6 +761,33 @@ test('a run action starts the program with the task file and line filled in', HE
   await ui.press({ key: TASK_46 })
   await ui.unmount()
   expect(spawned).toEqual([{ argv: ['notepad++', '-n10', 'C:/proj/docs/TODO.md'], cwd: 'C:/proj' }])
+})
+
+test('a press on the project folder opens it in File Explorer', HEADING, async ($, on) => {
+  const spawned: { argv: readonly string[]; cwd?: string }[] = []
+  mockEngine(on, { todo: TODO })
+  on('process.spawn', async function* (_$, e) {
+    spawned.push({ argv: e.argv, cwd: e.cwd })
+    yield* []
+
+    return { value: { code: 0, signal: null } } as never
+  })
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: 'Path:C:/proj' })
+  await ui.unmount()
+  expect(spawned).toEqual([{ argv: ['explorer.exe', 'C:\\proj'], cwd: 'C:/proj' }])
+})
+
+test('a program a press cannot start shows its error under the project folder', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO })
+
+  const ui = await paneMount($, on)
+  await ui.press({ key: 'Path:C:/proj' })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  await ui.unmount()
+  expect(texts.slice(0, 2)).toEqual(['C:\\proj'.padEnd(PANE_COLUMNS), header('Could not start explorer.exe')])
 })
 
 test('a run action on a changed file fills in its first changed line', HEADING, async ($, on) => {

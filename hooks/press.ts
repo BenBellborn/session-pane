@@ -11,7 +11,7 @@ const output = atom({ plugin: 'session-pane', key: 'output' } as const, null as 
 const selection = atom({ plugin: 'session-pane', key: 'selection' } as const, null as string | null, { shape: 'selection-1' })
 
 // The pane items a press acts on, as config.json's `onPress` names them.
-export type ItemKind = 'changedFile' | 'task' | 'permission' | 'agent'
+export type ItemKind = 'changedFile' | 'task' | 'permission' | 'agent' | 'path'
 
 // A pressed pane item. `key`: its selection key. `label`: its name in a section title. `values`: its placeholders
 // ({text}, {root}, and per kind {file}, {path}, {line}, {id}). `cwd`: where its commands run. `file`: a changed file's.
@@ -21,7 +21,8 @@ export type PressedItem = { kind: ItemKind; key: string; label: string; values: 
 // task or tool text, so a shell would run what that text says.
 type Action = 'select' | 'diff' | { show: string[]; format?: 'diff' | 'text' } | { run: string[] } | { submit: string } | { fill: string }
 
-const DEFAULT_ACTIONS: Record<ItemKind, Action> = { changedFile: 'diff', task: 'select', permission: 'select', agent: 'select' }
+// The project folder opens in File Explorer.
+const DEFAULT_ACTIONS: Record<ItemKind, Action> = { changedFile: 'diff', task: 'select', permission: 'select', agent: 'select', path: { run: ['explorer.exe', '{path}'] } }
 
 // Writes config.json with the default actions when it is missing, so a user finds the file to edit.
 export async function configEnsure($: EngineInterface) {

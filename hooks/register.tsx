@@ -63,6 +63,7 @@ const CHANGE_MARKS: Record<DiffHalf['change'], string> = { same: ' ', removed: '
 type Settings = {
   taskFiles: string[]
   taskLine: RegExp | string
+  showPath: boolean
   showPermissions: boolean
   showChanged: boolean
   showAgents: boolean
@@ -78,6 +79,8 @@ type FileButton = { path: string; name: string; item: PressedItem; isSelected: b
 // One pane row, top to bottom; the render hook draws each kind.
 type Row =
   | { kind: 'header'; name: string }
+  // The project folder, its start cut when too long.
+  | { kind: 'path'; text: string; item: PressedItem; isSelected: boolean }
   // A line with an item is pressable: a press selects it and runs its action, a second press clears it.
   // `head`: spans in their own colors before `text` (an agent's model and effort).
   | { kind: 'line'; head?: Span[]; text: string; color?: ThemeKey; item?: PressedItem; isSelected?: boolean }
@@ -127,7 +130,8 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Code, Text } = $.ui.resolve(e)
-    const rows = paneRows(await read($, view), Object.values(await read($, permissions)), await read($, output), await read($, selection))
+    const pick = { opened: await read($, output), selected: await read($, selection) }
+    const rows = paneRows(await read($, view), Object.values(await read($, permissions)), pick, settings.showPath)
     const selectedShade = selectedShadeOf(await themeName($))
     // A pressable label; a selected one sits on the selection shade.
     const pressable = (item: PressedItem, isSelected: boolean | undefined, label: (style: object) => RenderChildren) => (
@@ -154,6 +158,11 @@ export const register: Register = (on, options) => {
           <Text color={row.color}>{rest}</Text>
         </Text>
       ))
+    }
+    const pathLine = (row: Extract<Row, { kind: 'path' }>) => {
+      const text = widthCutLeft(row.text, e.props.bodyColumns)
+
+      return pressable(row.item, row.isSelected, style => <Text {...style} wrap="truncate-end">{row.isSelected ? text.padEnd(e.props.bodyColumns) : text}</Text>)
     }
     const taskLine = (row: Extract<Row, { kind: 'task' }>) => {
       const lead = `${TASK_MARK}${row.id ?? ''}`
@@ -193,6 +202,8 @@ export const register: Register = (on, options) => {
       switch (row.kind) {
         case 'header':
           return <Text color="inactive">{`── ${row.name} `.padEnd(Math.max(row.name.length + 4, e.props.bodyColumns), '─')}</Text>
+        case 'path':
+          return pathLine(row)
         case 'line':
           return row.item ? pressableLine(row, row.item) : <Text color={row.color} wrap="truncate-end">{row.text}</Text>
         case 'task':
@@ -214,6 +225,11 @@ function widthCut(text: string, width: number) {
   return text.length > width ? `${text.slice(0, Math.max(width - 1, 0))}…` : text
 }
 
+// rule: a path keeps its end, the folder's own name; its start is cut.
+function widthCutLeft(text: string, width: number) {
+  return text.length > width ? `…${text.slice(text.length - Math.max(width - 1, 0))}` : text
+}
+
 // One side-by-side half, `width` wide: "<line number> <mark><text>", the number right-aligned; null: blank.
 function halfText(side: DiffHalf | null, numberWidth: number, width: number) {
   if (!side) return ' '.repeat(width)
@@ -227,6 +243,7 @@ function settingsRead(options: PluginOptions): Settings {
   return {
     taskFiles: String(options.taskFiles ?? '').split(',').map(path => path.trim()).filter(path => path !== ''),
     taskLine: taskLinePattern(options),
+    showPath: options.showPath !== false,
     showPermissions: options.showPermissions !== false,
     showChanged: options.showChanged !== false,
     showAgents: options.showAgents !== false,
@@ -504,18 +521,18 @@ async function themeName($: EngineInterface) {
   return String(row?.value ?? 'dark')
 }
 
-// The pane's rows: each part with something to show, under its header, and the open section under the part of its item.
-// A part the settings hide is empty: sync fills none.
-function paneRows(shown: SessionView, asks: string[], opened: Output | null, selected: string | null): Row[] {
-  const pick = { opened, selected }
-  const rows = [
+// The pane's rows: the project folder, then each part with something to show, under its header, and the open section under
+// the part of its item. A part the settings hide is empty: sync fills none.
+function paneRows(shown: SessionView, asks: string[], pick: Chosen, showPath: boolean): Row[] {
+  const { opened, selected } = pick
+  const parts = [
     ...part('Permissions', 'Permissions', textLines(shown, 'permission', asks.map(text => ({ text, color: 'permission' as const })), pick), opened),
     ...part('Changed', 'Changed', changedRows(shown, selected), opened),
     ...part('Agents', 'Agents', textLines(shown, 'agent', shown.agents.map(agentSpans), pick), opened),
     ...part('Tasks', shown.mode ? `Tasks (/${shown.mode})` : 'Tasks', taskRows(shown, pick), opened),
   ]
 
-  return rows.length === 0 ? [inactive('Nothing to show.')] : rows
+  return [...(showPath ? pathRows(shown, pick) : []), ...(parts.length === 0 ? [inactive('Nothing to show.')] : parts)]
 }
 
 type Chosen = { opened: Output | null; selected: string | null }
@@ -523,9 +540,27 @@ type Chosen = { opened: Output | null; selected: string | null }
 // A part's header and rows, then the open section when its item sits in this part; nothing when it has no row.
 function part(partName: string, header: string, rows: readonly Row[], opened: Output | null): Row[] {
   if (rows.length === 0) return []
-  const section: Row[] = opened?.key.startsWith(`${partName}:`) ? [{ kind: 'header', name: opened.title }, { kind: 'output', output: opened }] : []
 
-  return [{ kind: 'header', name: header }, ...rows, ...section]
+  return [{ kind: 'header', name: header }, ...rows, ...sectionRows(partName, opened)]
+}
+
+// The open section's title and text when its item sits in this part; else none.
+function sectionRows(partName: string, opened: Output | null): Row[] {
+  return opened?.key.startsWith(`${partName}:`) ? [{ kind: 'header', name: opened.title }, { kind: 'output', output: opened }] : []
+}
+
+// The project folder's row, no header, then its open section. Its {path} is the shown form.
+function pathRows(shown: SessionView, pick: Chosen): Row[] {
+  if (shown.projectRoot === '') return []
+  const text = windowsForm(shown.projectRoot)
+  const item: PressedItem = { kind: 'path', key: `Path:${shown.projectRoot}`, label: 'path', values: { text, path: text, root: shown.projectRoot }, cwd: shown.projectRoot }
+
+  return [{ kind: 'path', text, item, isSelected: item.key === pick.selected }, ...sectionRows('Path', pick.opened)]
+}
+
+// 'C:/proj' gives 'C:\proj'; a path with no drive letter stays as is.
+function windowsForm(path: string) {
+  return /^[A-Za-z]:/.test(path) ? path.replace(/\//g, '\\') : path
 }
 
 function changedRows(shown: SessionView, selected: string | null): Row[] {

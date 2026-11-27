@@ -25,6 +25,12 @@
       "description": "With Task format custom: a regex one task line matches, with a named group 'title' and an optional named group 'id'.",
       "default": ""
     },
+    "showPath": {
+      "type": "boolean",
+      "title": "Show project path",
+      "description": "The project folder on the first line; a press opens it in File Explorer.",
+      "default": true
+    },
     "showPermissions": {
       "type": "boolean",
       "title": "Show denied permissions",
