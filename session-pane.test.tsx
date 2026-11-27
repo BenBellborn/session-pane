@@ -1,6 +1,8 @@
 // Run from the repo folder: claude plugin test
 import { expect, mock, test } from 'claude-code/testing'
 
+import { diffSides } from './hooks/diff'
+
 type On = Parameters<Parameters<typeof test>[1]>[1]
 type Engine = Parameters<Parameters<typeof test>[1]>[0]
 
@@ -124,8 +126,8 @@ function nestedTextCount(element: { children: unknown[] }): number {
   return nested.reduce((n, c) => n + (c.type === 'Text' ? 1 : 0) + nestedTextCount(c), 0)
 }
 
-async function paneTextElements($: Engine, on: On, before?: () => Promise<unknown>, presses: string[] = [], type = 'Text') {
-  const ui = await paneMount($, on, before)
+async function paneTextElements($: Engine, on: On, before?: () => Promise<unknown>, presses: string[] = [], type = 'Text', columns = PANE_COLUMNS) {
+  const ui = await paneMount($, on, before, columns)
   for (const key of presses) await ui.press({ key })
   const found = await ui.findAll({ type })
   await ui.unmount()
@@ -133,7 +135,7 @@ async function paneTextElements($: Engine, on: On, before?: () => Promise<unknow
   return found
 }
 
-async function paneMount($: Engine, on: On, before?: () => Promise<unknown>) {
+async function paneMount($: Engine, on: On, before?: () => Promise<unknown>, columns = PANE_COLUMNS) {
   const clock = mock.clock(on)
   await $.session.start({ source: 'startup', cwd: 'C:/proj/docs/adr', isInteractive: true } as never).catch(() => undefined)
   await before?.()
@@ -144,7 +146,7 @@ async function paneMount($: Engine, on: On, before?: () => Promise<unknown>) {
     component: 'Pane',
     requestId: 'session-pane',
     surface: 'terminal',
-    props: { title: 'Session', isFocused: false, bodyColumns: PANE_COLUMNS, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+    props: { title: 'Session', isFocused: false, bodyColumns: columns, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
   } as never)
 }
 
@@ -299,6 +301,103 @@ test('a press on a changed file shows its diff against HEAD from its first hunk,
   expect(await ui.find({ type: 'Text', text: '── Diff a.py ' })).toBeDefined()
   expect((await ui.find({ type: 'Code' }))!.props).toMatchObject({ source: '@@ -1,2 +1,2 @@\n-old\n+new\n same', format: 'diff', path: 'src/a.py' })
   await ui.unmount()
+})
+
+test('a wide pane shows a diff side by side: old lines left, new lines right, by line number', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: [' M src/a.py', ''].join('\0'), diff: DIFF })
+
+  const ui = await paneMount($, on, undefined, 160)
+  await ui.press({ key: 'Changed:src/a.py' })
+  expect(await ui.findAll({ type: 'Code' })).toEqual([])
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  expect(texts).toContain('@@ -1,2 +1,2 @@')
+  expect(texts).toContain(`${'1 -old'.padEnd(79)}│${'1 +new'.padEnd(79)}`)
+  expect(texts).toContain(`${'2  same'.padEnd(79)}│${'2  same'.padEnd(79)}`)
+  await ui.unmount()
+})
+
+test('a wide pane shows a new file side by side with a blank left half', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: ['?? docs/new.md', ''].join('\0'), diff: 'new file mode 100644\n@@ -0,0 +1 @@\n+x\n' })
+
+  const texts = (await paneTextElements($, on, undefined, ['Changed:docs/new.md'], 'Text', 160)).map(t => t.text)
+  expect(texts).toContain(`${' '.repeat(79)}│${'1 +x'.padEnd(79)}`)
+})
+
+test('a wide pane cuts a long line and turns a tab into spaces, so each half keeps its width', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: [' M src/a.py', ''].join('\0'), diff: `@@ -9,1 +9,1 @@\n-\tx\n+${'y'.repeat(100)}\n` })
+
+  const texts = (await paneTextElements($, on, undefined, ['Changed:src/a.py'], 'Text', 160)).map(t => t.text)
+  expect(texts).toContain(`${'9 -    x'.padEnd(79)}│9 +${'y'.repeat(75)}…`)
+})
+
+test('a wide pane shows a diff with no hunk (a binary file) as is', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: [' M a.png', ''].join('\0'), diff: 'Binary files a/a.png and b/a.png differ\n' })
+
+  const ui = await paneMount($, on, undefined, 160)
+  await ui.press({ key: 'Changed:a.png' })
+  expect((await ui.find({ type: 'Code' }))!.props.source).toBe('Binary files a/a.png and b/a.png differ')
+  await ui.unmount()
+})
+
+const same = (line: number, text: string) => ({ kind: 'pair', left: { line, text, change: 'same' }, right: { line, text, change: 'same' } })
+
+test('diffSides pairs a context line with itself and steps both line numbers', async () => {
+  expect(diffSides('@@ -4,2 +7,2 @@ def f():\n a\n b')).toEqual([
+    { kind: 'hunk', text: '@@ -4,2 +7,2 @@ def f():' },
+    { kind: 'pair', left: { line: 4, text: 'a', change: 'same' }, right: { line: 7, text: 'a', change: 'same' } },
+    { kind: 'pair', left: { line: 5, text: 'b', change: 'same' }, right: { line: 8, text: 'b', change: 'same' } },
+  ])
+})
+
+test('diffSides pairs a removed run with the added run after it row by row; the shorter side is blank', async () => {
+  expect(diffSides('@@ -1,3 +1,2 @@\n-a\n-b\n+c\n d\n-e\n+f\n+g')).toEqual([
+    { kind: 'hunk', text: '@@ -1,3 +1,2 @@' },
+    { kind: 'pair', left: { line: 1, text: 'a', change: 'removed' }, right: { line: 1, text: 'c', change: 'added' } },
+    { kind: 'pair', left: { line: 2, text: 'b', change: 'removed' }, right: null },
+    { kind: 'pair', left: { line: 3, text: 'd', change: 'same' }, right: { line: 2, text: 'd', change: 'same' } },
+    { kind: 'pair', left: { line: 4, text: 'e', change: 'removed' }, right: { line: 3, text: 'f', change: 'added' } },
+    { kind: 'pair', left: null, right: { line: 4, text: 'g', change: 'added' } },
+  ])
+})
+
+test('diffSides starts a new run when a removed line follows an added one', async () => {
+  expect(diffSides('@@ -1,2 +1,1 @@\n-a\n+b\n-c')).toEqual([
+    { kind: 'hunk', text: '@@ -1,2 +1,1 @@' },
+    { kind: 'pair', left: { line: 1, text: 'a', change: 'removed' }, right: { line: 1, text: 'b', change: 'added' } },
+    { kind: 'pair', left: { line: 2, text: 'c', change: 'removed' }, right: null },
+  ])
+})
+
+test('diffSides shows a new file as added lines with a blank left side', async () => {
+  expect(diffSides('@@ -0,0 +1,2 @@\n+a\n+b')).toEqual([
+    { kind: 'hunk', text: '@@ -0,0 +1,2 @@' },
+    { kind: 'pair', left: null, right: { line: 1, text: 'a', change: 'added' } },
+    { kind: 'pair', left: null, right: { line: 2, text: 'b', change: 'added' } },
+  ])
+})
+
+test('diffSides restarts the line numbers at each hunk', async () => {
+  expect(diffSides('@@ -1 +1 @@\n a\n@@ -20 +30 @@\n b')).toEqual([{ kind: 'hunk', text: '@@ -1 +1 @@' }, same(1, 'a'), { kind: 'hunk', text: '@@ -20 +30 @@' }, { kind: 'pair', left: { line: 20, text: 'b', change: 'same' }, right: { line: 30, text: 'b', change: 'same' } }])
+})
+
+test('diffSides skips the file header and the no-newline note', async () => {
+  expect(diffSides('diff --git a/x b/x\nindex 1..2\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+a\n\\ No newline at end of file\n')).toEqual([
+    { kind: 'hunk', text: '@@ -1 +1 @@' },
+    { kind: 'pair', left: { line: 1, text: 'a', change: 'removed' }, right: { line: 1, text: 'a', change: 'added' } },
+  ])
+})
+
+test('diffSides skips a second file header after a hunk (a custom diff action over several files)', async () => {
+  expect(diffSides('@@ -1 +1 @@\n-a\ndiff --git a/y b/y\nindex 1..2\n--- a/y\n+++ b/y\n@@ -5 +5 @@\n+b')).toEqual([
+    { kind: 'hunk', text: '@@ -1 +1 @@' },
+    { kind: 'pair', left: { line: 1, text: 'a', change: 'removed' }, right: null },
+    { kind: 'hunk', text: '@@ -5 +5 @@' },
+    { kind: 'pair', left: null, right: { line: 5, text: 'b', change: 'added' } },
+  ])
+})
+
+test('diffSides gives no row for text with no hunk', async () => {
+  expect(diffSides('Binary files a/a.png and b/a.png differ')).toEqual([])
 })
 
 test('a second press on the same file closes its diff', HEADING, async ($, on) => {

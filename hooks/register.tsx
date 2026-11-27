@@ -2,6 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, Register, RenderChildren, ThemeKey } from 'claude-code'
 
 import type { AgentLine, BackgroundTasks, ChangedFile, OpenPermissions, Output, SessionView, TaskKind, TaskLine } from '../types'
+import { diffSides } from './diff'
+import type { DiffHalf, DiffRow } from './diff'
 import { configEnsure, itemPress } from './press'
 import type { PressedItem } from './press'
 import { attempt, configDirPath } from './shared'
@@ -51,6 +53,11 @@ const MODEL_COLORS: Record<string, ThemeKey> = { Opus: 'warning', Fable: 'claude
 const EFFORT_COLORS: Record<string, ThemeKey> = { high: 'warning', xhigh: 'warning', max: 'claude' }
 // rule: each background task kind has its own color, none an agent line's model or effort takes.
 const TASK_COLORS: Record<TaskKind, ThemeKey> = { shell: 'bashBorder', monitor: 'planMode', workflow: 'ide' }
+// A pane this wide or wider shows a diff side by side; a narrower one keeps the unified diff.
+const SIDE_BY_SIDE_COLUMNS = 160
+// rule: a side-by-side half takes only its change's background; no syntax color, which the unified view keeps.
+const CHANGE_COLORS: Record<DiffHalf['change'], ThemeKey | undefined> = { same: undefined, removed: 'diffRemoved', added: 'diffAdded' }
+const CHANGE_MARKS: Record<DiffHalf['change'], string> = { same: ' ', removed: '-', added: '+' }
 
 // The plugin's options as the pane uses them. `taskLine` is the note to show instead when the custom pattern is bad.
 type Settings = {
@@ -155,6 +162,32 @@ export const register: Register = (on, options) => {
       // rule: a task line wraps, so its whole title shows; agent and permission lines are cut.
       return pressable(row.item, row.isSelected, style => <Text {...style} wrap="wrap">{TASK_MARK}{row.id && <Text color="suggestion">{row.id}</Text>}{rest}</Text>)
     }
+    // Old lines left, "│", new lines right; each half padded to its width, so the columns line up.
+    const sideBySide = (sides: DiffRow[]) => {
+      const width = Math.floor((e.props.bodyColumns - 1) / 2)
+      const highest = sides.reduce((n, row) => (row.kind === 'pair' ? Math.max(n, row.left?.line ?? 0, row.right?.line ?? 0) : n), 0)
+      const numberWidth = String(highest).length
+      const half = (side: DiffHalf | null) => <Text backgroundColor={side ? CHANGE_COLORS[side.change] : undefined}>{halfText(side, numberWidth, width)}</Text>
+
+      return (
+        <Box flexDirection="column">
+          {sides.map(row =>
+            row.kind === 'hunk' ? (
+              <Text color="inactive" wrap="truncate-end">{row.text}</Text>
+            ) : (
+              <Text wrap="truncate-end">{half(row.left)}<Text color="inactive">│</Text>{half(row.right)}</Text>
+            ),
+          )}
+        </Box>
+      )
+    }
+    // A diff side by side when the pane is wide and the diff has a hunk; else unified, or plain text.
+    const outputDraw = (opened: Output) => {
+      if (opened.format !== 'diff') return <Text>{opened.source}</Text>
+      const sides = e.props.bodyColumns >= SIDE_BY_SIDE_COLUMNS ? diffSides(opened.source) : []
+
+      return sides.length > 0 ? sideBySide(sides) : <Code source={opened.source} format="diff" path={opened.path} wrap="truncate-end" />
+    }
     // A part's header fills the pane's width: "── Agents ───────".
     const draw = (row: Row) => {
       switch (row.kind) {
@@ -167,7 +200,7 @@ export const register: Register = (on, options) => {
         case 'changed':
           return <Box flexDirection="row" flexWrap="wrap">{fileButtons(row.files)}</Box>
         case 'output':
-          return row.output.format === 'diff' ? <Code source={row.output.source} format="diff" path={row.output.path} wrap="truncate-end" /> : <Text>{row.output.source}</Text>
+          return outputDraw(row.output)
       }
     }
 
@@ -179,6 +212,15 @@ export const register: Register = (on, options) => {
 // rule: permission and agent text cut to pane width in code; inside a Button the terminal wraps despite truncate-end.
 function widthCut(text: string, width: number) {
   return text.length > width ? `${text.slice(0, Math.max(width - 1, 0))}…` : text
+}
+
+// One side-by-side half, `width` wide: "<line number> <mark><text>", the number right-aligned; null: blank.
+function halfText(side: DiffHalf | null, numberWidth: number, width: number) {
+  if (!side) return ' '.repeat(width)
+  const lead = `${String(side.line).padStart(numberWidth)} ${CHANGE_MARKS[side.change]}`
+
+  // rule: a tab becomes 4 spaces, so terminal tab stops never push the right half out of line.
+  return `${lead}${widthCut(side.text.replace(/\t/g, '    '), width - lead.length)}`.padEnd(width)
 }
 
 function settingsRead(options: PluginOptions): Settings {
