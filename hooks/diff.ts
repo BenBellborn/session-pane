@@ -59,3 +59,36 @@ function runPair(sides: Sides) {
   sides.removed = []
   sides.added = []
 }
+
+// rule: a diff half counts terminal cells, not String.length: a CJK character or emoji draws 2 cells, a combining mark 0.
+const ZERO_CELLS = /^[\p{Mn}\p{Me}\p{Cf}]$/u
+const TWO_CELLS = /^(?:[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{20000}-\u{3FFFD}]|\p{Emoji_Presentation})$/u
+
+function pointCells(point: string) {
+  if (ZERO_CELLS.test(point)) return 0
+  return TWO_CELLS.test(point) ? 2 : 1
+}
+
+function cellWidth(text: string) {
+  let cells = 0
+  for (const point of text) cells += pointCells(point)
+  return cells
+}
+
+// Text at most `width` cells wide; longer text ends in "…".
+export function cellCut(text: string, width: number) {
+  if (cellWidth(text) <= width) return text
+  let cut = ''
+  let cells = 0
+  for (const point of text) {
+    cells += pointCells(point)
+    if (cells > width - 1) break
+    cut += point
+  }
+  return `${cut}…`
+}
+
+// Text padded with spaces to `width` cells.
+export function cellPad(text: string, width: number) {
+  return text + ' '.repeat(Math.max(width - cellWidth(text), 0))
+}

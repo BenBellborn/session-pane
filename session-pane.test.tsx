@@ -355,6 +355,15 @@ test('a wide pane cuts a long line and turns a tab into spaces, so each half kee
   expect(texts).toContain(`${'9 -    x'.padEnd(79)}│9 +${'y'.repeat(75)}…`)
 })
 
+// '中' and '😀' draw 2 cells, 'é' as 'e' plus a combining mark 1 cell; a half is 79 cells, "1 -" or "1 +" 3 of them.
+test('a wide pane cuts and pads each half by terminal cells, so wide characters keep the right half in the pane', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, git: [' M src/a.py', ''].join('\0'), diff: `@@ -1,2 +1,2 @@\n-中中é\n-${'😀'.repeat(60)}\n+${'中'.repeat(60)}\n+a${'中'.repeat(60)}\n` })
+
+  const texts = (await paneTextElements($, on, undefined, ['Changed:src/a.py'], 'Text', 160)).map(t => t.text)
+  expect(texts).toContain(`1 -中中é${' '.repeat(71)}│1 +${'中'.repeat(37)}… `)
+  expect(texts).toContain(`2 -${'😀'.repeat(37)}… │2 +a${'中'.repeat(37)}…`)
+})
+
 test('a wide pane shows a diff with no hunk (a binary file) as is', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, git: [' M a.png', ''].join('\0'), diff: 'Binary files a/a.png and b/a.png differ\n' })
 

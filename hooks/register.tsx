@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, Register, RenderChildren, ThemeKey } from 'claude-code'
 
 import type { AgentLine, BackgroundTasks, ChangedFile, OpenPermissions, Output, SessionView, TaskKind, TaskLine } from '../types'
-import { diffSides } from './diff'
+import { cellCut, cellPad, diffSides } from './diff'
 import type { DiffHalf, DiffRow } from './diff'
 import { configEnsure, itemPress } from './press'
 import type { PressedItem } from './press'
@@ -230,13 +230,13 @@ function widthCutLeft(text: string, width: number) {
   return text.length > width ? `…${text.slice(text.length - Math.max(width - 1, 0))}` : text
 }
 
-// One side-by-side half, `width` wide: "<line number> <mark><text>", the number right-aligned; null: blank.
+// One side-by-side half, `width` terminal cells wide: "<line number> <mark><text>", the number right-aligned; null: blank.
 function halfText(side: DiffHalf | null, numberWidth: number, width: number) {
   if (!side) return ' '.repeat(width)
   const lead = `${String(side.line).padStart(numberWidth)} ${CHANGE_MARKS[side.change]}`
 
   // rule: a tab becomes 4 spaces, so terminal tab stops never push the right half out of line.
-  return `${lead}${widthCut(side.text.replace(/\t/g, '    '), width - lead.length)}`.padEnd(width)
+  return cellPad(`${lead}${cellCut(side.text.replace(/\t/g, '    '), width - lead.length)}`, width)
 }
 
 function settingsRead(options: PluginOptions): Settings {
