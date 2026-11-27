@@ -4,6 +4,9 @@ import { expect, mock, test } from 'claude-code/testing'
 type On = Parameters<Parameters<typeof test>[1]>[1]
 type Engine = Parameters<Parameters<typeof test>[1]>[0]
 
+// The pane width paneMount draws at: each test line fits, so only a line made too long is cut.
+const PANE_COLUMNS = 60
+
 const TODO = [
   '# TODO',
   '',
@@ -85,6 +88,11 @@ function mockEngine(on: On, files: Files) {
 }
 
 // The pane's shown parts, header name ("Tasks (/fix)") to the lines under it, in pane order. `before` runs once the session started.
+// A part's header as the pane draws it, filled to the pane's width.
+function header(name: string) {
+  return `── ${name} `.padEnd(PANE_COLUMNS, '─')
+}
+
 async function paneParts($: Engine, on: On, before?: () => Promise<unknown>) {
   const parts = new Map<string, string[]>()
   let lines: string[] = []
@@ -136,7 +144,7 @@ async function paneMount($: Engine, on: On, before?: () => Promise<unknown>) {
     component: 'Pane',
     requestId: 'session-pane',
     surface: 'terminal',
-    props: { title: 'Session', isFocused: false, bodyColumns: 10, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+    props: { title: 'Session', isFocused: false, bodyColumns: PANE_COLUMNS, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
   } as never)
 }
 
@@ -236,7 +244,7 @@ test('a hidden part shows no header', { options: { showChanged: false, showAgent
   mockEngine(on, { rootTodo: CHECKBOXES })
 
   const texts = await paneTexts($, on)
-  expect(texts.filter(text => text.startsWith('── '))).toEqual(['── Tasks ─'])
+  expect(texts.filter(text => text.startsWith('── '))).toEqual([header('Tasks')])
 })
 
 test('the filter file sits under CLAUDE_CONFIG_DIR when it is set', HEADING, async ($, on) => {
@@ -275,7 +283,7 @@ test('each changed file shows in its extension color and the commas in the theme
     ['new.md', 'permission'],
     [', ', 'inactive'],
     ['out', undefined],
-    ['── Tasks ─', 'inactive'],
+    [header('Tasks'), 'inactive'],
   ])
 })
 
@@ -417,6 +425,12 @@ test('a background task kind shows in its own color', HEADING, async ($, on) => 
   ])
 })
 
+test('an agent line longer than the pane is cut to its width with an ellipsis', HEADING, async ($, on) => {
+  mockEngine(on, { todo: TODO, agents: [{ ...SCOUT, name: 'x'.repeat(PANE_COLUMNS) }] })
+
+  expect((await paneParts($, on)).get('Agents')).toEqual([`Opus:Explore - ${'x'.repeat(PANE_COLUMNS - 16)}…`])
+})
+
 test('a background command whose argument holds line breaks shows on one line', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO })
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' } }))
@@ -474,7 +488,7 @@ test('each call auto mode denied shows as one line under a Permissions header at
   mockEngine(on, { todo: TODO })
 
   const texts = await paneTexts($, on, judged($, on, [[PUSH, 'deny'], [WRITE, 'deny']]))
-  expect(texts.slice(0, 4)).toEqual(['── Permissions ', 'Bash: git push origin main', 'Write: C:/proj/a.py', '── Tasks ─'])
+  expect(texts.slice(0, 4)).toEqual([header('Permissions'), 'Bash: git push origin main', 'Write: C:/proj/a.py', header('Tasks')])
 })
 
 test('with no denied call, no Permissions part shows', HEADING, async ($, on) => {
@@ -552,14 +566,14 @@ test('a second press on a changed file clears its highlight', HEADING, async ($,
 test('a press on an agent line highlights the full line', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, agents: [SCOUT] })
 
-  expect(await highlighted($, on, ['Agents:Opus:Explore - scout'])).toEqual(['Opus:Explore - scout'.padEnd(10)])
+  expect(await highlighted($, on, ['Agents:Opus:Explore - scout'])).toEqual(['Opus:Explore - scout'.padEnd(PANE_COLUMNS)])
 })
 
 test('a press on a task line moves the highlight there from the line selected before', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO, agents: [SCOUT] })
 
   expect(await highlighted($, on, ['Agents:Opus:Explore - scout', 'Tasks:   46: 🟡 [Refactor] Domain-first names'])).toEqual([
-    '❯    46: 🟡 [Refactor] Domain-first names',
+    '❯    46: 🟡 [Refactor] Domain-first names'.padEnd(PANE_COLUMNS),
   ])
 })
 
@@ -573,7 +587,7 @@ test('a press on a permission line highlights it', HEADING, async ($, on) => {
   mockEngine(on, { todo: TODO })
 
   expect(await highlighted($, on, ['Permissions:Bash: git push origin main'], judged($, on, [[PUSH, 'deny']]))).toEqual([
-    'Bash: git push origin main'.padEnd(10),
+    'Bash: git push origin main'.padEnd(PANE_COLUMNS),
   ])
 })
 
@@ -650,7 +664,7 @@ test('a show action opens a section with the command output under the pressed it
   const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
   await ui.unmount()
   expect(ran).toContain('git log --grep Task 46')
-  expect(texts.slice(-2)).toEqual(['── git 46 ', 'No output.'])
+  expect(texts.slice(-2)).toEqual([header('git 46'), 'No output.'])
 })
 
 test('a submit action sends the filled text as a prompt', HEADING, async ($, on) => {
@@ -705,8 +719,8 @@ test('a config.json that is no JSON shows a config error section and keeps the h
   await ui.press({ key: TASK_46 })
   const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
   await ui.unmount()
-  expect(texts).toContain('── Config error ')
-  expect(texts).toContain('❯    46: 🟡 [Refactor] Domain-first names')
+  expect(texts).toContain(header('Config error'))
+  expect(texts).toContain('❯    46: 🟡 [Refactor] Domain-first names'.padEnd(PANE_COLUMNS))
 })
 
 test('a diff action on a task shows a config error', HEADING, async ($, on) => {

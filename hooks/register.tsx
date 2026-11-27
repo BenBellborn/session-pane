@@ -137,7 +137,9 @@ export const register: Register = (on, options) => {
     // keeps that inversion on its text.
     const pressableLine = (row: Extract<Row, { kind: 'line' }>, item: PressedItem) => {
       const head = row.head ?? []
-      const rest = row.isSelected ? row.text.padEnd(e.props.bodyColumns - head.reduce((n, s) => n + s.text.length, 0)) : row.text
+      const width = e.props.bodyColumns - head.reduce((n, s) => n + s.text.length, 0)
+      const text = widthCut(row.text, width)
+      const rest = row.isSelected ? text.padEnd(width) : text
 
       return pressable(item, row.isSelected, style => (
         <Text {...style} wrap="truncate-end">
@@ -150,7 +152,8 @@ export const register: Register = (on, options) => {
       const lead = `${TASK_MARK}${row.id ?? ''}`
       const rest = row.isSelected ? row.text.padEnd(e.props.bodyColumns - lead.length) : row.text
 
-      return pressable(row.item, row.isSelected, style => <Text {...style} wrap="truncate-end">{TASK_MARK}{row.id && <Text color="suggestion">{row.id}</Text>}{rest}</Text>)
+      // rule: a task line wraps, so its whole title shows; agent and permission lines are cut.
+      return pressable(row.item, row.isSelected, style => <Text {...style} wrap="wrap">{TASK_MARK}{row.id && <Text color="suggestion">{row.id}</Text>}{rest}</Text>)
     }
     // A part's header fills the pane's width: "── Agents ───────".
     const draw = (row: Row) => {
@@ -171,6 +174,11 @@ export const register: Register = (on, options) => {
     // The pane scrolls with the arrow keys while focused, so every line is drawn.
     return <Box flexDirection="column">{rows.map(draw)}</Box>
   })
+}
+
+// rule: permission and agent text cut to pane width in code; inside a Button the terminal wraps despite truncate-end.
+function widthCut(text: string, width: number) {
+  return text.length > width ? `${text.slice(0, Math.max(width - 1, 0))}…` : text
 }
 
 function settingsRead(options: PluginOptions): Settings {
