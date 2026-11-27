@@ -1,7 +1,7 @@
 // Run from the repo folder: claude plugin test
 import { expect, mock, test } from 'claude-code/testing'
 
-import { diffSides } from './hooks/diff'
+import { cellCut, cellPad, diffSides } from './hooks/diff'
 
 type On = Parameters<Parameters<typeof test>[1]>[1]
 type Engine = Parameters<Parameters<typeof test>[1]>[0]
@@ -362,6 +362,16 @@ test('a wide pane cuts and pads each half by terminal cells, so wide characters 
   const texts = (await paneTextElements($, on, undefined, ['Changed:src/a.py'], 'Text', 160)).map(t => t.text)
   expect(texts).toContain(`1 -中中é${' '.repeat(71)}│1 +${'中'.repeat(37)}… `)
   expect(texts).toContain(`2 -${'😀'.repeat(37)}… │2 +a${'中'.repeat(37)}…`)
+})
+
+// A flag, a skin-toned emoji, a ZWJ family, a VS16 emoji and a CJK character each draw 2 cells; cuts keep whole clusters.
+test('cellPad and cellCut count terminal cells per grapheme cluster', async () => {
+  for (const x of ['\u{1F1E9}\u{1F1EA}', '\u{1F44D}\u{1F3FD}', '\u{1F468}‍\u{1F469}‍\u{1F467}', '❤️', '中']) {
+    expect(cellPad(x, 4)).toBe(`${x}  `)
+  }
+  expect(cellPad('é', 2)).toBe('é ')
+  expect(cellCut('a\u{1F1E9}\u{1F1EA}\u{1F1E9}\u{1F1EA}', 4)).toBe('a\u{1F1E9}\u{1F1EA}…')
+  expect(cellCut('\u{1F44D}\u{1F3FD}\u{1F44D}\u{1F3FD}', 3)).toBe('\u{1F44D}\u{1F3FD}…')
 })
 
 test('a wide pane shows a diff with no hunk (a binary file) as is', HEADING, async ($, on) => {

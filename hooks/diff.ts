@@ -60,18 +60,20 @@ function runPair(sides: Sides) {
   sides.added = []
 }
 
-// rule: a diff half counts terminal cells, not String.length: a CJK character or emoji draws 2 cells, a combining mark 0.
+// rule: a diff half counts terminal cells per grapheme cluster, not String.length: a CJK character, emoji, flag or skin-toned emoji draws 2 cells, a combining mark 0.
 const ZERO_CELLS = /^[\p{Mn}\p{Me}\p{Cf}]$/u
 const TWO_CELLS = /^(?:[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{20000}-\u{3FFFD}]|\p{Emoji_Presentation})$/u
+const CLUSTERS = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
-function pointCells(point: string) {
-  if (ZERO_CELLS.test(point)) return 0
-  return TWO_CELLS.test(point) ? 2 : 1
+function clusterCells(cluster: string) {
+  const points = [...cluster]
+  if (points.every(point => ZERO_CELLS.test(point))) return 0
+  return points.some(point => point === '\uFE0F' || TWO_CELLS.test(point)) ? 2 : 1
 }
 
 function cellWidth(text: string) {
   let cells = 0
-  for (const point of text) cells += pointCells(point)
+  for (const { segment } of CLUSTERS.segment(text)) cells += clusterCells(segment)
   return cells
 }
 
@@ -80,10 +82,10 @@ export function cellCut(text: string, width: number) {
   if (cellWidth(text) <= width) return text
   let cut = ''
   let cells = 0
-  for (const point of text) {
-    cells += pointCells(point)
+  for (const { segment } of CLUSTERS.segment(text)) {
+    cells += clusterCells(segment)
     if (cells > width - 1) break
-    cut += point
+    cut += segment
   }
   return `${cut}…`
 }
