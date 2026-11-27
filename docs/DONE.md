@@ -87,3 +87,25 @@
 - **Target Files:** `hooks/diff.ts`, `hooks/register.tsx`, `session-pane.test.tsx`.
 - **Done Criteria:** test at `bodyColumns: 160` with a 60-CJK-character `+` line: drawn row width at most 160 cells, right half text
   present; `bash ~/.claude/scripts/plugin-test.sh` and `tsc -p .` green.
+
+## Task: 🟡 [Refactor] Count side-by-side diff cell width per grapheme cluster, not per code point
+- **Goal:** flags, skin-toned emoji, ZWJ and VS16 emoji keep the `│` column of the wide diff view in place.
+- **Current:** `hooks/diff.ts` `pointCells` (~line 67) counts each code point: `TWO_CELLS` (East Asian wide or
+  `\p{Emoji_Presentation}`) = 2, `ZERO_CELLS` (`\p{Mn}\p{Me}\p{Cf}`) = 0, else 1. `cellWidth` sums it; `cellCut` cuts per code
+  point; `cellPad` pads by `cellWidth`. Only caller: `hooks/register.tsx:239` (`cellPad(lead + cellCut(text, ...), width)`).
+- **Current:** `\p{Emoji_Presentation}` matches regional indicators (U+1F1E6-1F1FF) and skin-tone modifiers (U+1F3FB-1F3FF)
+  (node check: both true). VS16 text emoji count 1, ZWJ sequences count per part (accepted limits in dcf8f1b).
+- **Case:** half 79 cells, line `-a🇩🇪` → flag counts 4, draws 2 → `cellPad` adds 2 spaces too few, `│` lands 2 cells left.
+  `👍🏽` counts 4, draws 2.
+- **Current:** test in `session-pane.test.tsx` importing `cellCut`, `cellPad` from `./hooks/diff`: for each of `🇩🇪`, `👍🏽`, `👨‍👩‍👧`,
+  `❤️`, `中`, `cellPad(x, 4)` equals `x` plus 2 spaces; `cellPad('é' as e + U+0301, 2)` adds 1 space; `cellCut('a🇩🇪🇩🇪', 4)`
+  equals `a🇩🇪…`; `cellCut('👍🏽👍🏽', 3)` equals `👍🏽…` (cut keeps whole cluster). Run red first.
+- **Current:** `hooks/diff.ts`: replace `pointCells` with `clusterCells(cluster)`: 0 when every code point matches `ZERO_CELLS`;
+  2 when any code point matches `TWO_CELLS` or is U+FE0F (VS16); else 1. Split text with one module-level
+  `new Intl.Segmenter(undefined, { granularity: 'grapheme' })`; `cellWidth` and `cellCut` loop over its segments, `cellCut` adds
+  whole clusters only. Update the `// rule:` comment above `ZERO_CELLS`: a half counts terminal cells per grapheme cluster.
+- **Current:** autopicked Recommended width model (Intl.Segmenter grapheme clusters); `es2023` lib in tsconfig types
+  `Intl.Segmenter`, node 22 has it.
+- **Restrictions:** keep `cellCut` and `cellPad` signatures; touch no other caller; existing width test (line ~359) stays green unchanged.
+- **Target Files:** `hooks/diff.ts`, `session-pane.test.tsx`.
+- **Done Criteria:** new test plus existing cell width tests pass; `bash ~/.claude/scripts/plugin-test.sh` and `npx tsc -p .` green.
